@@ -46,7 +46,7 @@ def animate(iFrame):
     plt.annotate("Remaining time: %s%%"%(np.round(new_state[1], 2)), xy=(300, 1), xycoords='figure points',
                  bbox=dict(fc='white', ec='white'))
 
-ani = FuncAnimation(current_plt, animate, interval=10, frames=FRAMES, repeat=False)
+ani = FuncAnimation(current_plt, animate, interval=1500, frames=FRAMES, repeat=False)
 plt.axhline(y=pref_pace, color='k', linestyle='--', label='Target Pace')
 plt.title("Pace simulator")
 plt.xlabel("time")
