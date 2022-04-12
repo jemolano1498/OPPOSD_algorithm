@@ -42,11 +42,11 @@ class PaceSimulator:
     def calculate_model(self, pacing, percentage, grad=0):
         input_model = int(str(pacing) + str(1 if percentage > 0 else 0), 2)
         if input_model == 3:  # 1-1
-            z = [0.00261429, 0.97637389]
+            z = [0.00261429, 0.98637389]
             model = MathModel(1, z, grad)
 
         elif input_model == 2:  # 1-0
-            z = [-0.00899492, 1.04965412]
+            z = [-0.00899492, 1.03965412]
             model = MathModel(1, z, grad)
 
         elif input_model == 1:  # 0-1
@@ -62,7 +62,10 @@ class PaceSimulator:
     def predict(self, pacing, pref_pace, target_pace):
         percentage = abs(pref_pace - target_pace) / pref_pace
         prediction_noise = np.random.uniform(0, 5e-3)
-        pace_noise = np.random.uniform(pref_pace - 5, pref_pace + 5)
+        if percentage > 0:
+            pace_noise = np.random.uniform(target_pace - 4, target_pace+3)
+        else:
+            pace_noise = np.random.uniform(pref_pace - 5, pref_pace + 5)
 
         input_model = int(str(pacing) + str(1 if percentage > 0 else 0), 2)
         if self.time_step == 0:
@@ -90,9 +93,9 @@ class PaceSimulator:
             elif input_model == 3:  # 1-1
                 self.current_model = 3
                 if self.last_value > 1:
-                    self.models[self.current_model] = self.calculate_model(1, 0.1)
+                    self.models[self.current_model] = self.calculate_model(1, 0)
                 else:
-                    self.models[self.current_model] = self.calculate_model(1, 0.1, 1)
+                    self.models[self.current_model] = self.calculate_model(1, 1)
                 self.time_step = self.models[self.current_model].inverse_value(
                     self.last_value
                 )
