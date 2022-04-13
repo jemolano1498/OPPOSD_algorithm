@@ -50,7 +50,7 @@ class RunningEnv:
         self.time_limit = time_limit
         self.current_timer = Timer(self.time_limit)
 
-    def step(self, action, target_pace):
+    def step(self, action, target_pace, extra_pace=0):
         done = 0
         if action == 1:
             self.current_timer = Timer(self.time_limit)
@@ -63,8 +63,7 @@ class RunningEnv:
             if self.current_timer.timer_on():
                 pacing_value = 1
                 self.current_timer.tick()
-
-        current_pace = self.simulator.predict(pacing_value, self.pref_pace, target_pace)
+        current_pace = self.simulator.predict(pacing_value, self.pref_pace, target_pace, extra_pace)
         avg_pace = self.state.get_next_state(current_pace)
         new_state = (avg_pace / target_pace) - 1
 
@@ -111,15 +110,18 @@ class EnvWrapper:
 
     def step(self, action):
         reward = 0
-        for i in range(self.times[action]):
-            current_pace, new_state, _, real_pacing, _ = self.running_env.step(1, self.target_pace)
+        timelapse = action % len(self.times)
+        extra_pace = 0 if action < 5 else 0.01
+        new_state = []
+        for i in range(self.times[timelapse]):
+            current_pace, new_state, _, real_pacing, _ = self.running_env.step(1, self.target_pace, extra_pace)
             self.state_traj = np.append(self.state_traj, (new_state[0] + 1) * self.target_pace)
             self.pace = np.append(self.pace, current_pace)
             self.rewards = np.append(self.rewards, -1)
             self.env_pacing = np.append(self.env_pacing, real_pacing)
             self.steps = self.steps + 1
             reward = reward - 1
-        if action == 0:
+        if timelapse == 0:
             current_pace, new_state, reward, real_pacing, done = self.running_env.step(0, self.target_pace)
             self.state_traj = np.append(self.state_traj, (new_state[0] + 1) * self.target_pace)
             self.pace = np.append(self.pace, current_pace)
@@ -128,7 +130,7 @@ class EnvWrapper:
             self.steps = self.steps + 1
             return new_state, reward, done
 
-        return new_state, np.array([round(reward/10)], dtype=np.float), np.array([0])
+        return new_state, np.array([round(reward)], dtype=np.float), np.array([0])
 
     def reset(self):
         self.running_env.reset()

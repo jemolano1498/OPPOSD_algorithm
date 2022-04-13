@@ -59,7 +59,7 @@ class PaceSimulator:
 
         return model
 
-    def predict(self, pacing, pref_pace, target_pace):
+    def predict(self, pacing, pref_pace, target_pace, extra_pace=0):
         percentage = abs(pref_pace - target_pace) / pref_pace
         prediction_noise = np.random.uniform(0, 5e-3)
         if percentage > 0:
@@ -107,6 +107,8 @@ class PaceSimulator:
                 self.time_step = 1
 
         self.time_step = self.time_step + 1
-        self.last_value = self.models[self.current_model].calculate_x(self.time_step)
+        if self.last_value > 1:
+            extra_pace = - extra_pace
+        self.last_value = self.models[self.current_model].calculate_x(self.time_step) + extra_pace
 
         return (self.last_value + prediction_noise) * pace_noise
