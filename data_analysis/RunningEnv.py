@@ -1,4 +1,4 @@
-from PaceSimulator import PaceSimulator
+from data_analysis.PaceSimulator import PaceSimulator
 import matplotlib.pyplot as plt
 import numpy as np
 import math
