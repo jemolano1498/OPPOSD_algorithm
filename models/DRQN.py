@@ -20,257 +20,7 @@ from tqdm.notebook import tqdm
 from sklearn.linear_model import LinearRegression
 import seaborn as sns
 import random
-
-class MathModel:
-    def __init__(self, logaritmic, z, grad=0):
-        self.z = z
-        self.logaritmic = logaritmic
-        self.rand_comp = 0
-        self.grad = 1
-        if self.logaritmic:
-            self.rand_comp = np.random.uniform(0.2, 1.5)
-            if grad:
-                self.grad = -1
-        else:
-            self.rand_comp = np.random.uniform(-5, 5)
-            if grad:
-                self.grad = 1 if np.random.random() < 0.5 else -1
-
-    def calculate_x(self, x):
-        if self.logaritmic:
-            return self.grad * self.z[0] * np.log(self.rand_comp * x) + self.z[1]
-        else:
-            return (self.grad * (self.z[0] + (self.rand_comp * 1e-5))) * x + self.z[1]
-
-    def inverse_value(self, y):
-        if self.logaritmic:
-            return np.exp(self.grad * (y - self.z[1]) / self.z[0]) / self.rand_comp
-        else:
-            return 0
-
-    def adjust_intercept(self, new_val):
-        self.z[1] = new_val
-
-class PaceSimulator:
-    def __init__(self):
-        self.time_step = 0
-        self.last_value = None
-        self.current_model = None
-        self.models = [None] * 4
-
-    def calculate_model(self, pacing, percentage, grad=0):
-        input_model = int(str(pacing) + str(1 if percentage > 0 else 0), 2)
-        if input_model == 3:  # 1-1
-            z = [0.00261429, 0.98637389]
-            model = MathModel(1, z, grad)
-
-        elif input_model == 2:  # 1-0
-            z = [-0.00899492, 1.03965412]
-            model = MathModel(1, z, grad)
-
-        elif input_model == 1:  # 0-1
-            z = [-3.17034405e-05, 9.86148032e-01]
-            model = MathModel(0, z)
-
-        else:  # 0-0
-            z = [-3.19261596e-06, 1.01227226e00]
-            model = MathModel(0, z, 0)
-
-        return model
-
-    def predict(self, pacing, pref_pace, target_pace):
-        percentage = abs(pref_pace - target_pace) / pref_pace
-        prediction_noise = np.random.uniform(0, 5e-3)
-        if percentage > 0:
-            pace_noise = np.random.uniform(target_pace - 4, target_pace+3)
-        else:
-            pace_noise = np.random.uniform(pref_pace - 5, pref_pace + 5)
-
-        input_model = int(str(pacing) + str(1 if percentage > 0 else 0), 2)
-        if self.time_step == 0:
-            self.last_value = np.random.uniform(0.9, 1.08)
-            self.time_step = self.time_step + 1
-            return (self.last_value + prediction_noise) * pace_noise
-
-        if input_model != self.current_model:
-            if input_model == 1:  # 0-1
-                self.current_model = 1
-                self.models[self.current_model] = self.calculate_model(0, 0.1)
-                self.models[self.current_model].adjust_intercept(self.last_value)
-                self.time_step = 1
-
-            elif input_model == 2:  # 1-0
-                self.current_model = 2
-                if self.last_value > 1:
-                    self.models[self.current_model] = self.calculate_model(1, 0)
-                else:
-                    self.models[self.current_model] = self.calculate_model(1, 1)
-                self.time_step = self.models[self.current_model].inverse_value(
-                    self.last_value
-                )
-
-            elif input_model == 3:  # 1-1
-                self.current_model = 3
-                if self.last_value > 1:
-                    self.models[self.current_model] = self.calculate_model(1, 0)
-                else:
-                    self.models[self.current_model] = self.calculate_model(1, 1)
-                self.time_step = self.models[self.current_model].inverse_value(
-                    self.last_value
-                )
-
-            else:  # 0-0
-                self.current_model = 0
-                self.models[self.current_model] = self.calculate_model(0, 0)
-                self.models[self.current_model].adjust_intercept(self.last_value)
-                self.time_step = 1
-
-        self.time_step = self.time_step + 1
-        self.last_value = self.models[self.current_model].calculate_x(self.time_step)
-
-        return (self.last_value + prediction_noise) * pace_noise
-
-class Timer:
-    def __init__(self, time_limit=30):
-        self.time_step = 0
-        self.time_limit = time_limit
-
-    def tick(self):
-        self.time_step = self.time_step + 1
-        if self.time_step == self.time_limit:
-            self.time_step = 0
-
-    def timer_on(self):
-        if self.time_step == 0:
-            return 0
-        else:
-            return 1
-
-    def get_remaining_percentage(self):
-        return 1 - ((self.time_limit - self.time_step) / self.time_limit)
-
-class EwmaBiasState:
-    def __init__(self, rho=0.95):
-        self.rho = rho  # Rho value for smoothing
-        self.s_prev = 0  # Initial value ewma value
-        self.timestep = 0
-        self.s_cur = 0
-        self.s_cur_bc = 0
-
-    def get_next_state(self, input):
-        self.s_cur = self.rho * self.s_prev + (1 - self.rho) * input
-        self.s_cur_bc = (self.s_cur) / (1 - math.pow(self.rho, self.timestep + 1))
-        self.s_prev = self.s_cur
-        self.timestep = self.timestep + 1
-
-        return self.s_cur_bc
-
-class RunningEnv:
-    def __init__(self, pref_pace, time_limit=30):
-        self.state = EwmaBiasState()
-        self.simulator = PaceSimulator()
-        self.pace_active = 0
-        self.pref_pace = pref_pace
-        self.time_limit = time_limit
-        self.current_timer = Timer(self.time_limit)
-
-    def step(self, action, target_pace):
-        done = 0
-        if action == 1:
-            self.current_timer = Timer(self.time_limit)
-            self.current_timer.tick()
-            self.pace_active = 1
-            pacing_value = 1
-        else:
-            self.pace_active = 0
-            pacing_value = 0
-            if self.current_timer.timer_on():
-                pacing_value = 1
-                self.current_timer.tick()
-
-        current_pace = self.simulator.predict(pacing_value, self.pref_pace, target_pace)
-        avg_pace = self.state.get_next_state(current_pace)
-        new_state = (avg_pace / target_pace) - 1
-
-        reward = self.get_distance_reward(target_pace, avg_pace)
-
-        return np.array([current_pace]), np.array([new_state], dtype=float), np.array([reward],
-                                                                                         dtype=float), np.array(
-            [pacing_value]), np.array([done])
-
-    def get_distance_reward(self, target_pace, current_pace):
-        reward = 0
-        if abs(target_pace - current_pace) > 5:
-            reward = -10 * (abs(target_pace - current_pace) - 5)
-        if abs(target_pace - current_pace) < 4:
-            reward = -5
-        if abs(target_pace - current_pace) < 2:
-            reward = 10
-        if abs(target_pace - current_pace) < 1:
-            reward = 20
-        return reward
-
-    def reset(self):
-        self.state = EwmaBiasState()
-        self.simulator = PaceSimulator()
-        self.pace_active = 0
-        self.current_timer = Timer(self.time_limit)
-
-class EnvWrapper:
-    def __init__(self, pref_pace, target_pace):
-        self.times = [0, 20, 25, 30, 40]
-        self.pref_pace = pref_pace
-        self.target_pace = target_pace
-        self.running_env = RunningEnv(pref_pace, 1)
-
-        self.state_traj = np.empty(0)
-        self.pace = np.empty(0)
-        self.final_rewards = np.empty(0)
-        self.action_rewards = np.empty(0)
-        self.state_rewards = np.empty(0)
-        self.env_pacing = np.empty(0)
-
-        self.steps = 0
-
-    def step(self, action):
-        total_reward = 0
-        action_reward = 0
-        state_reward = 0
-        new_state = 0
-        for i in range(self.times[action]):
-            current_pace, new_state, reward, real_pacing, _ = self.running_env.step(1, self.target_pace)
-            self.state_traj = np.append(self.state_traj, (new_state[0] + 1) * self.target_pace)
-            self.pace = np.append(self.pace, current_pace)
-            self.action_rewards = np.append(self.action_rewards, -1)
-            self.state_rewards = np.append(self.state_rewards, reward)
-            self.final_rewards = np.append(self.final_rewards, -1)
-            self.env_pacing = np.append(self.env_pacing, real_pacing)
-            self.steps = self.steps + 1
-            state_reward = state_reward + reward
-            action_reward = action_reward - 1
-        if action == 0:
-            current_pace, new_state, state_reward, real_pacing, done = self.running_env.step(0, self.target_pace)
-            self.state_traj = np.append(self.state_traj, (new_state[0] + 1) * self.target_pace)
-            self.pace = np.append(self.pace, current_pace)
-            self.action_rewards = np.append(self.action_rewards, 0)
-            self.state_rewards = np.append(self.state_rewards, state_reward)
-            self.final_rewards = np.append(self.final_rewards, state_reward)
-            self.env_pacing = np.append(self.env_pacing, real_pacing)
-            self.steps = self.steps + 1
-            return new_state, state_reward, done, state_reward, np.array([0])
-        total_reward = state_reward + action_reward
-        # self.total_rewards = np.append(self.total_rewards, state_reward)
-        return new_state, np.array([action_reward], dtype=float), np.array([0]), np.array([state_reward], dtype=float), np.array([action_reward], dtype=float)
-
-    def reset(self):
-        self.running_env.reset()
-        self.state_traj = np.empty(0)
-        self.pace = np.empty(0)
-        self.final_rewards = np.empty(0)
-        self.action_rewards = np.empty(0)
-        self.state_rewards = np.empty(0)
-        self.env_pacing = np.empty(0)
-        self.steps = 0
+from data_analysis.RunningEnv import  EnvWrapper
 
 #number of episodes to run
 NUM_EPISODES = 1000
@@ -320,7 +70,7 @@ def get_agent_score(network):
                 action=(output.argmax()).item()
             else:
                 action, _ = select_action(network, state)
-            new_state, reward, done, _, _ = env.step(action)
+            new_state, reward, done = env.step(action)
             score += reward
             state = new_state
             if action > 0:
@@ -354,7 +104,6 @@ class model(nn.Module):
         x = torch.reshape(x, (x.shape[0], 1, x.shape[1]))
         output, _ = self.lstm(x, (hidden[0], hidden[1]))  # lstm with input, hidden, and internal state
         output = output.view(-1, self.hidden_size)  # reshaping the data for Dense layer next
-        # output = torch.reshape(output, (output.shape[0], 1))  # reshaping the data for Dense layer next
         out = self.relu(output)
         out = self.fc_1(out)  # first Dense
         out = self.relu(out)  # relu
@@ -417,7 +166,7 @@ def trainDRQN(episodes):
   avg_scores_LSTM = []
   steps_done=0
   for i in tqdm(range(0,episodes,1)):
-      # print("Episode",i)
+      print("Episode",i)
       env.reset()
       prev=env.step(0)[0]
       prev = torch.from_numpy(prev)
@@ -433,7 +182,7 @@ def trainDRQN(episodes):
           rand= random.uniform(0,1)
           if rand < 0.05:
               action=random.randint(0,4)
-          sc,reward,done, _, _ = env.step(action)
+          sc,reward,done = env.step(action)
 
           sc = torch.from_numpy(sc)
           sc = sc.type('torch.FloatTensor')
@@ -450,7 +199,7 @@ def trainDRQN(episodes):
       scores_LSTM = np.append(scores_LSTM, rew)
       if i%10==0:
           target_net.load_state_dict(policy.state_dict())
-      if (((i+1)%150) == 0):
+      if (((i+1)%100) == 0):
           avg_scores_LSTM = np.append(avg_scores_LSTM, get_agent_score(policy))
   return scores_LSTM, avg_scores_LSTM
 
@@ -466,8 +215,70 @@ target_net.eval()
 optimizer = optim.RMSprop(policy.parameters())
 criterion = F.smooth_l1_loss
 
-scores_LSTM, avg_scores_LSTM = trainDRQN(300)
+scores_LSTM, avg_scores_LSTM = trainDRQN(100)
 
-sns.set()
+print(np.mean(avg_scores_LSTM))
 
-plt.plot(avg_scores_LSTM, color='r')
+# plt.plot(avg_scores_LSTM)
+
+done = False
+env.reset()
+state = env.step(0)[0]
+try_scores = []
+
+for _ in tqdm(range(50)):
+    env.reset()
+    state = env.step(0)[0]
+    done = False
+    score = 0
+    time_step = 0
+    while env.steps < FRAMES:
+        # env.render()
+        state = torch.from_numpy(state)
+        state = state.type('torch.FloatTensor')
+        hidden = policy.init_hidden(1)
+        output=policy(state.unsqueeze(0), hidden)
+        action=(output.argmax()).item()
+        new_state, reward, done = env.step(action)
+        score += reward
+        state = new_state
+        if action > 0:
+            time_step = time_step + env.times[action%5]
+        else:
+            time_step = time_step + 1
+    try_scores.append(score)
+np.array(try_scores).mean()
+
+env.reset()
+state = env.step(0)[0]
+
+while env.steps < FRAMES:
+    state = torch.from_numpy(state)
+    state = state.type('torch.FloatTensor')
+    hidden = policy.init_hidden(1)
+    output=policy(state.unsqueeze(0), hidden)
+    action=(output.argmax()).item()
+    new_state, reward, done = env.step(action)
+    # if reward < 0:
+    #     print(action, state, new_state, reward)
+    if (action != 0):
+    #     # print(action, (state+1)*pref_pace, (new_state+1)*pref_pace, reward)
+        print(action, state, new_state, reward)
+    state = new_state
+
+x = np.linspace(0, len(env.env_pacing), len(env.env_pacing))
+plt.scatter(x[np.array(env.env_pacing)==1], np.array(env.pace)[np.array(env.env_pacing)==1], marker="x", label='Paced steps')
+plt.scatter(x[np.array(env.env_pacing)==0], np.array(env.pace)[np.array(env.env_pacing)==0], marker="x", label='Not-paced steps')
+
+
+# plt.scatter(x[np.array(env_pacing)==1], np.array(pace)[np.array(env_pacing)==1], marker="x", label='Paced steps')
+# plt.scatter(x[np.array(env_pacing)==0], np.array(pace)[np.array(env_pacing)==0], marker="x", label='Not-paced steps')
+
+# plt.scatter(x[np.array(pacing)==1], np.array(pacing)[np.array(pacing)==1]*181, color='r', marker="x")
+plt.axhline(y=target_pace, color='k', linestyle='--', label='Target Pace')
+
+plt.plot(x, env.state_traj, 'r-', linewidth=2)
+plt.legend()
+plt.show()
+
+# print(np.sum(env.final_rewards))
