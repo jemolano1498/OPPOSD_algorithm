@@ -1,0 +1,209 @@
+import numpy as np
+from datetime import datetime
+from Controllers import QController
+from Controllers import EpsilonGreedyController
+from Controllers import ACController
+from Runner import Runner
+from Learners import QLearner
+from Learners import ReinforceLearner
+from TransitionBatch import TransitionBatch
+# Plotting
+from IPython import display
+import matplotlib.pyplot as plt
+import pylab as pl
+
+
+class Experiment:
+    """ Abstract class of an experiment. Contains logging and plotting functionality."""
+
+    def __init__(self, params, model, **kwargs):
+        self.params = params
+        self.plot_frequency = params.get('plot_frequency', 10)
+        self.plot_train_samples = params.get('plot_train_samples', True)
+        self.print_when_plot = params.get('print_when_plot', False)
+        self.print_dots = params.get('print_dots', False)
+        self.episode_returns = []
+        self.episode_lengths = []
+        self.episode_losses = []
+        self.env_steps = []
+        self.total_run_time = 0.0
+
+    def plot_training(self, update=False):
+        """ Plots logged training results. Use "update=True" if the plot is continuously updated
+            or use "update=False" if this is the final call (otherwise there will be double plotting). """
+        # Smooth curves
+        window = max(int(len(self.episode_returns) / 50), 10)
+        if len(self.episode_losses) < window + 2: return
+        returns = np.convolve(self.episode_returns, np.ones(window) / window, 'valid')
+        lengths = np.convolve(self.episode_lengths, np.ones(window) / window, 'valid')
+        losses = np.convolve(self.episode_losses, np.ones(window) / window, 'valid')
+        env_steps = np.convolve(self.env_steps, np.ones(window) / window, 'valid')
+        # Determine x-axis based on samples or episodes
+        if self.plot_train_samples:
+            x_returns = env_steps
+            x_losses = env_steps[(len(env_steps) - len(losses)):]
+        else:
+            x_returns = [i + window for i in range(len(returns))]
+            x_losses = [i + len(returns) - len(losses) + window for i in range(len(losses))]
+        # Create plot
+        colors = ['b', 'g', 'r']
+        fig = plt.gcf()
+        fig.set_size_inches(16, 4)
+        plt.clf()
+        # Plot the losses in the left subplot
+        pl.subplot(1, 3, 1)
+        pl.plot(x_returns, returns, colors[0])
+        pl.xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
+        pl.ylabel('episode return')
+        # Plot the episode lengths in the middle subplot
+        ax = pl.subplot(1, 3, 2)
+        ax.plot(x_returns, lengths, colors[1])
+        ax.set_xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
+        ax.set_ylabel('episode length')
+        # Plot the losses in the right subplot
+        ax = pl.subplot(1, 3, 3)
+        ax.plot(x_losses, losses, colors[2])
+        ax.set_xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
+        ax.set_ylabel('loss')
+        # dynamic plot update
+        display.clear_output(wait=True)
+        if update:
+            display.display(pl.gcf())
+
+    def close(self):
+        """ Frees all allocated runtime ressources, but allows to continue the experiment later.
+            Calling the run() method after close must be able to pick up the experiment where it was. """
+        pass
+
+    def run(self):
+        """ Starts (or continues) the experiment. """
+        assert False, "You need to extend the Expeirment class and override the method run(). "
+
+
+class QLearningExperiment(Experiment):
+    """ Experiment that perfoms DQN. You can provide your own learner. """
+
+    def __init__(self, params, model, learner=None, **kwargs):
+        super().__init__(params, model, **kwargs)
+        self.max_episodes = params.get('max_episodes', int(100))
+        self.max_steps = params.get('max_steps', int(100))
+        self.run_steps = params.get('run_steps', 0)
+        self.grad_repeats = params.get('grad_repeats', 1)
+        self.controller = QController(model, num_actions=params.get('num_actions'), params=params)
+        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        self.runner = Runner(self.controller, params=params)
+        self.learner = QLearner(model, params=params) if learner is None else learner
+
+    def close(self):
+        """ Overrides Experiment.close(). """
+        self.runner.close()
+
+    def _learn_from_episode(self, episode):
+        """ This function uses the episode to train.
+            Although not implemented, one could also add the episode to a replay buffer here.
+            Returns the training loss for logging or None if train() was not called. """
+        # Call train (params['grad_repeats']) times
+        total_loss = 0
+        for i in range(self.grad_repeats):
+            total_loss += self.learner.train(episode['buffer'])
+        return total_loss / self.grad_repeats
+
+    def run(self):
+        """ Starts (or continues) the experiment. """
+        # Plot previous results if they exist
+        if self.plot_frequency is not None and len(self.episode_losses) > 2:
+            self.plot_training(update=True)
+        # Start (or continue experiment)
+        env_steps = 0 if len(self.env_steps) == 0 else self.env_steps[-1]
+        for e in range(self.max_episodes):
+            begin_time = datetime.now()
+            # Run an episode (or parts of it)
+            if self.run_steps > 0:
+                episode = self.runner.run(n_steps=self.run_steps, trim=False)
+            else:
+                episode = self.runner.run_episode()
+            # Log the results
+            env_steps += episode['env_steps']
+            if episode['episode_length'] is not None:
+                self.episode_lengths.append(episode['episode_length'])
+                self.episode_returns.append(episode['episode_reward'])
+                self.env_steps.append(env_steps)
+            # Make one (or more) learning steps with the episode
+            loss = self._learn_from_episode(episode)
+            if loss is not None: self.episode_losses.append(loss)
+            self.total_run_time += (datetime.now() - begin_time).total_seconds()
+            # Quit if maximal number of environment steps is reached
+            if env_steps >= self.max_steps:
+                break
+            # Show intermediate results
+            if self.print_dots:
+                print('.', end='')
+            if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0 \
+                    and len(self.episode_losses) > 2:
+                self.plot_training(update=True)
+                if self.print_when_plot:
+                    print('Update %u, 10-epi-return %.4g +- %.3g, length %u, loss %g, run-time %g sec.' %
+                          (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
+                           np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
+                           np.mean(self.episode_losses[-100:]), self.total_run_time))
+
+class ActorCriticExperiment(Experiment):
+    def __init__(self, params, model, learner=None, **kwargs):
+        super().__init__(params, model, **kwargs)
+        self.max_episodes = params.get('max_episodes', int(1E6))
+        self.max_steps = params.get('max_steps', int(1E9))
+        self.grad_repeats = params.get('grad_repeats', 1)
+        self.batch_size = params.get('batch_size', 1024)
+        self.controller = ACController(model, num_actions=params.get('num_actions'), params=params)
+        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        self.runner = Runner(self.controller, params=params)
+        self.learner = ReinforceLearner(model, params=params) if learner is None else learner
+        self.learner.set_controller(self.controller)
+
+    def close(self):
+        """ Overrides Experiment.close() """
+        self.runner.close()
+
+    def run(self):
+        """ Overrides Experiment.run() """
+        # Plot past results if available
+        if self.plot_frequency is not None and len(self.episode_losses) > 2:
+            self.plot_training(update=True)
+        # Run the experiment
+        transition_buffer = TransitionBatch(self.batch_size, self.runner.transition_format(), self.batch_size)
+        env_steps = 0 if len(self.env_steps) == 0 else self.env_steps[-1]
+        interacted_episodes = 0
+        for e in range(self.max_episodes):
+            # Run the policy for batch_size steps
+            batch = self.runner.run(self.batch_size, transition_buffer)
+            env_steps += batch['env_steps']
+            batch_episodes = 0
+            if batch['episode_length'] is not None:
+                self.env_steps.append(env_steps)
+                self.episode_lengths.append(batch['episode_length'])
+                self.episode_returns.append(batch['episode_reward'])
+                batch_episodes = batch['episodes_amount']
+                # Make a gradient update step
+            loss = self.learner.train(batch['buffer'])
+            self.episode_losses.append(loss)
+            # Quit if maximal number of environment steps is reached
+            if env_steps >= self.max_steps:
+                print('Steps limit reached')
+                break
+
+            interacted_episodes += batch_episodes
+            if interacted_episodes >= self.max_episodes:
+                print('Environment interaction limit reached')
+                break
+
+            # Show intermediate results
+            if self.print_dots:
+                print('.', end='')
+            if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0 \
+                    and len(self.episode_losses) > 2:
+                self.plot_training(update=True)
+                if self.print_when_plot:
+                    print('Episode %u, 100-epi-return %.4g +- %.3g, length %u, loss %g' %
+                          (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
+                           np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
+                           np.mean(self.episode_losses[-100:])))
