@@ -145,3 +145,6 @@ class EnvWrapper:
         self.env_pacing = np.empty(0)
         self.steps = 0
         return self.running_env.step(0, self.target_pace)[1]
+
+    def close(self):
+        pass

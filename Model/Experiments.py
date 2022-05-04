@@ -151,6 +151,7 @@ class ActorCriticExperiment(Experiment):
     def __init__(self, params, model, learner=None, **kwargs):
         super().__init__(params, model, **kwargs)
         self.max_episodes = params.get('max_episodes', int(1E6))
+        self.max_batch_episodes = params.get('max_batch_episodes', int(1E6))
         self.max_steps = params.get('max_steps', int(1E9))
         self.grad_repeats = params.get('grad_repeats', 1)
         self.batch_size = params.get('batch_size', 1024)
@@ -173,7 +174,7 @@ class ActorCriticExperiment(Experiment):
         transition_buffer = TransitionBatch(self.batch_size, self.runner.transition_format(), self.batch_size)
         env_steps = 0 if len(self.env_steps) == 0 else self.env_steps[-1]
         interacted_episodes = 0
-        for e in range(self.max_episodes):
+        for e in range(self.max_batch_episodes):
             # Run the policy for batch_size steps
             batch = self.runner.run(self.batch_size, transition_buffer)
             env_steps += batch['env_steps']

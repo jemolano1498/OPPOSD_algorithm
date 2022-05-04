@@ -53,7 +53,6 @@ class Runner:
         """ Make a step in the environment (and update internal bookeeping) """
         ns, r, d = self.env.step(a.item())
         self.sum_rewards += r
-        if self.use_pixels: ns = self._pixel_observation()
         return r, ns, d
 
     def _next_step(self, done=True, next_state=None):
