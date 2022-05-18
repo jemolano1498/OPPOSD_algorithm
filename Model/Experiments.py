@@ -3,7 +3,7 @@ from datetime import datetime
 from Controllers import QController
 from Controllers import EpsilonGreedyController
 from Controllers import ACController
-from Runner import Runner
+from Runner import Runner, Experiments_runner
 from Learners import QLearner
 from Learners import ReinforceLearner
 from TransitionBatch import TransitionBatch
@@ -11,6 +11,7 @@ from TransitionBatch import TransitionBatch
 from IPython import display
 import matplotlib.pyplot as plt
 import pylab as pl
+import torch as th
 
 
 class Experiment:
@@ -208,3 +209,96 @@ class ActorCriticExperiment(Experiment):
                           (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
                            np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
                            np.mean(self.episode_losses[-100:])))
+
+class ActorCriticExperimentRunning(Experiment):
+    def __init__(self, params, model, learner=None, **kwargs):
+        super().__init__(params, model, **kwargs)
+        self.max_episodes = params.get('max_episodes', int(1E6))
+        self.max_batch_episodes = params.get('max_batch_episodes', int(1E6))
+        self.max_steps = params.get('max_steps', int(1E9))
+        self.grad_repeats = params.get('grad_repeats', 1)
+        self.batch_size = params.get('batch_size', 1024)
+        self.controller = ACController(model, num_actions=params.get('num_actions'), params=params)
+        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        self.runner = Experiments_runner(self.controller, params=params)
+        self.learner = ReinforceLearner(model, params=params) if learner is None else learner
+        self.learner.set_controller(self.controller)
+
+    def close(self):
+        """ Overrides Experiment.close() """
+        self.runner.close()
+
+    def run(self):
+        """ Overrides Experiment.run() """
+        # Plot past results if available
+        if self.plot_frequency is not None and len(self.episode_losses) > 2:
+            self.plot_training(update=True)
+        # Run the experiment
+        transition_buffer = TransitionBatch(self.batch_size, self.runner.transition_format(), self.batch_size)
+        env_steps = 0 if len(self.env_steps) == 0 else self.env_steps[-1]
+        interacted_episodes = 0
+        for e in range(self.max_batch_episodes):
+            # Run the policy for batch_size steps
+            batch = self.runner.run(self.batch_size, transition_buffer)
+            # Make a gradient update step
+            loss = self.learner.train(batch['buffer'])
+            self.episode_losses.append(loss)
+            # Quit if maximal number of environment steps is reached
+            if env_steps >= self.max_steps:
+                print('Steps limit reached')
+                break
+
+            # if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0:
+            #     self.episode_returns = np.append(self.episode_returns, self.test_in_env())
+            #     self.plot_training(update=True)
+            #     if self.print_when_plot:
+            #         print('Batch %d %.4g +- %.3g' % (e, np.mean(self.episode_returns[-5:]),
+            #                                          np.std(self.episode_returns[-5:])))
+        self.episode_returns = self.test_in_env()
+
+    def plot_training(self, update=False):
+        """ Plots logged training results. Use "update=True" if the plot is continuously updated
+            or use "update=False" if this is the final call (otherwise there will be double plotting). """
+        # Smooth curves
+        window = max(int(len(self.episode_returns) / 50), 10)
+
+        returns = np.convolve(self.episode_returns, np.ones(window) / window, 'valid')
+
+        # Determine x-axis based on samples or episodes
+        x_returns = [i + window for i in range(len(returns))]
+
+        # Create plot
+        colors = ['b', 'g', 'r']
+        fig = plt.gcf()
+        fig.set_size_inches(16, 4)
+        plt.clf()
+
+        pl.plot(x_returns, returns, colors[0])
+        pl.xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
+        pl.ylabel('episode return')
+
+        # dynamic plot update
+        display.clear_output(wait=True)
+        if update:
+            display.display(pl.gcf())
+
+    def test_in_env(self):
+        rewards = []
+
+        self.controller.controller.model.eval()
+        with th.no_grad():
+            for _ in range(50):
+            # for _ in range(self.plot_frequency):
+                state = self.runner.env.reset()
+                done = False
+                score = 0
+                while not done:
+                    action = self.controller.choose(state).detach().item()
+                    # action = 1
+                    new_state, reward, done = self.runner.env.step(action)
+                    score += reward
+                    state = new_state
+                rewards.append(score)
+        self.controller.controller.model.train()
+
+        return rewards

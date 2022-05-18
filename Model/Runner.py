@@ -2,7 +2,10 @@
 import torch as th
 import numpy as np
 import numbers
+import pandas as pd
 from RunningEnv import EnvWrapper
+from RunningEnv import RunningEnv
+from RunningEnv import EwmaBiasState
 from TransitionBatch import TransitionBatch
 
 class Runner:
@@ -112,3 +115,154 @@ class Runner:
         """ Runs one episode in the environemnt.
             Returns a dictionary containing the transition_buffer and episode statstics. """
         return self.run(0, transition_buffer, trim, return_dict)
+
+class Experiments_runner(Runner):
+    def __init__(self, controller, params={}, exploration_step=1):
+        self.env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+        self.cont_actions = False
+        self.controller = controller
+        self.epi_len = params.get('max_episode_length', 500)
+        self.gamma = params.get('gamma', 0.99)
+        self.use_pixels = params.get('pixel_observations', False)
+
+        # MANUALLY SET
+        self.state_shape = params.get('states_shape')
+        # Set up current state and time step
+        self.sum_rewards = 0
+        self.state = None
+        self.time = 0
+        self._next_step()
+        self.experiments_transition_buffer = TransitionBatch(5000, self.transition_format())
+        self.fill_transition_buffer()
+
+    def close(self):
+        """ Closes the underlying environment. Should always when ending an experiment. """
+        self.env.close()
+
+    def transition_format(self):
+        """ Returns the format of transtions: a dictionary of (shape, dtype) entries for each key. """
+        return {'actions': ((1,), th.long),
+                'states': (self.state_shape, th.float32),
+                'next_states': (self.state_shape, th.float32),
+                'rewards': ((1,), th.float32),
+                'dones': ((1,), th.bool),
+                'returns': ((1,), th.float32)}
+
+    def fill_transition_buffer(self):
+        time, episode_start, episode_lengths, episode_rewards = 0, 0, [], []
+        max_steps = 5000
+
+        data_folder_path = "~/Documents/THESIS/Project_Juan/"
+        exp_batch = [16, 10]
+        tests = [['PNPpref', 'PNPfast'], ['CP103', 'IP103', 'CP110', 'IP110']]
+        t = 0
+
+        for exp in range(len(exp_batch)):
+            for participant in range(1, exp_batch[exp]):
+                participant_number = str(participant)
+                for i in range(len(tests[exp])):
+                    calculated_values = pd.read_csv(
+                        data_folder_path + ('calculated_variables/%s_R_%s_calculated.csv') % (
+                            tests[exp][i], participant_number))
+
+                    target_pace = calculated_values[calculated_values['pacing_frequency'].notna()][
+                        'pacing_frequency'].mean()
+                    calculated_values_norm = calculated_values.copy()
+                    calculated_values_norm['norm_step_frequency'] = calculated_values_norm[
+                                                                        'step_frequency'] / target_pace
+
+                    env = RunningEnv(target_pace)
+                    wrapper = EnvWrapper(target_pace, target_pace)
+                    state_func = EwmaBiasState()
+                    timestep = 0
+                    state = 0
+                    action = 0
+                    reward = 0
+                    n_state = 0
+                    finish_leap = False
+                    skip_steps = 0
+                    total_reward = 0
+                    # Add first value
+                    add_zero = 1
+
+                    for row in calculated_values_norm.to_numpy():
+
+                        if skip_steps > 0:
+                            if skip_steps == 1:
+                                finish_leap = True
+                            skip_steps -= 1
+                            timestep += 1
+                            continue
+                        else:
+                            avg_pace = state_func.get_next_state(row[2])
+                            n_state = (avg_pace / target_pace) - 1
+
+                            if timestep == 0:
+                                state = n_state
+                                timestep += 1
+                                continue
+
+                            if finish_leap:
+                                # print(timestep, state, n_state, action, reward, avg_pace, target_pace)
+                                self.experiments_transition_buffer.add(self._wrap_transition(state, action, reward, n_state, 0))
+                                t += 1
+                                total_reward += reward
+                                # Add random small 0's
+                                add_zero = np.random.randint(0,10)
+
+                                finish_leap = False
+
+                            if (not pd.isna(row[3]) and add_zero == 0):
+                                action = np.random.randint(1, len(wrapper.times))
+                                reward = - wrapper.times[action]
+                                skip_steps = wrapper.times[action] + 1
+                            else:
+                                if add_zero > 0:
+                                    add_zero -= 1
+                                action = 0
+                                reward = env.get_distance_reward(target_pace, avg_pace)
+                                # print(timestep, state, n_state, action, reward, avg_pace, target_pace)
+                                self.experiments_transition_buffer.add(self._wrap_transition(state, action, reward, n_state, 0))
+                                t += 1
+                                total_reward += reward
+
+                        state = n_state
+                        timestep += 1
+                    # results[((participant-1)*4)+(i)][j] = total_reward
+                    if t > max_steps:
+                        t = max_steps - 1
+                    self.experiments_transition_buffer['returns'][t] = self.experiments_transition_buffer['rewards'][t]
+                    for i2 in range(t - 1, episode_start - 1, -1):
+                        self.experiments_transition_buffer['returns'][i2] = self.experiments_transition_buffer['rewards'][i2] \
+                                                              + self.gamma * self.experiments_transition_buffer['returns'][i2 + 1]
+                    episode_start = t + 1
+                    # print("Runner %s - %s R: %d" % (participant_number, test_name[exp][i], total_reward))
+
+                    episode_lengths.append(self.time + 1)
+                    episode_rewards.append(self.sum_rewards)
+                    time += 1
+
+
+    def run(self, n_steps, transition_buffer=None, trim=True, return_dict=None):
+        """ Runs n_steps in the environment and stores them in the trainsition_buffer (newly created if None).
+            If n_steps <= 0, stops at the end of an episode and optionally trims the transition_buffer.
+            Returns a dictionary containing the transition_buffer and episode statstics. """
+
+        self.experiments_transition_buffer.sample()
+
+        # Add the sampled transitions to the given transition buffer
+        transition_buffer = self.experiments_transition_buffer if transition_buffer is None \
+            else transition_buffer.add(self.experiments_transition_buffer)
+        if trim: transition_buffer.trim()
+        # Return statistics (mean reward, mean length and environment steps)
+        if return_dict is None: return_dict = {}
+        return_dict.update({'buffer': transition_buffer})
+        return return_dict
+
+    def run_episode(self, transition_buffer=None, trim=True, return_dict=None):
+        """ Runs one episode in the environemnt.
+            Returns a dictionary containing the transition_buffer and episode statstics. """
+        return self.run(0, transition_buffer, trim, return_dict)
+
+# class Heuristic_runner(Runner):
+    
