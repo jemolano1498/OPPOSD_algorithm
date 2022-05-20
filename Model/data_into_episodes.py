@@ -1,17 +1,18 @@
 #%%
-# Pytorch and tools
-import torch as th
-import numpy as np
-import seaborn as sns
+import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
+from RunningEnv import RunningEnv
 from RunningEnv import EnvWrapper
-from Experiments import ActorCriticExperiment
-from Learners import ReinforceLearner
-from Learners import OffpolicyActorCriticLearner
-from Learners import PPOLearner
+from RunningEnv import EwmaBiasState
+from TransitionBatch import TransitionBatch
+import torch as th
+import numbers
+from Model.Learners import PPOLearner, OffpolicyActorCriticLearner
+from Model.Experiments import ActorCriticExperimentHeuristic
 #%%
 pref_pace = 181
-target_pace = pref_pace * 1.1
+target_pace = pref_pace*1.1
 #%%
 def default_params():
     """ These are the default parameters used int eh framework. """
@@ -48,12 +49,6 @@ def default_params():
         'soft_target_update_param': 0.01,  # update parameter for the 'soft' target update
         'double_q': True,  # whether DQN uses double Q-learning
         'grad_repeats': 1,  # how many gradient updates / runner call
-        # Image input parameters
-        'pixel_observations': False,  # use pixel observations (we will not use this feature here)
-        'pixel_resolution': (78, 78),  # scale image to this resoluton
-        'pixel_grayscale': True,  # convert image into grayscale
-        'pixel_add_last_obs': True,  # stacks 2 observations
-        'pixel_last_obs_delay': 3,  # delay between the two stacked observations
 
         # Runners env
         'pref_pace': 181,  # Athlete's preferred pace
@@ -72,7 +67,7 @@ def test_in_environment(experiment, env):
         done = False
         score = 0
         while not done:
-            action = experiment.controller.choose(state).item()
+            action = experiment.controller.choose(state).detach().item()
             new_state, reward, done = env.step(action)
             score += reward
             state = new_state
@@ -86,11 +81,11 @@ def test_in_environment(experiment, env):
     done = False
 
     while not done:
-        action = experiment.controller.choose(state).item()
+        action = experiment.controller.choose(state).detach().item()
         new_state, reward, done = env.step(action)
 
-        if action == 0:
-            print(env.steps, action)
+        # if action == 0:
+        #     print(env.steps, action)
         # if reward < 0:
         #     print(action, state, new_state, reward)
         # if (action != 5):
@@ -117,32 +112,13 @@ def test_in_environment(experiment, env):
 
     print(np.sum(env.rewards))
 #%%
-def plot_experiments(experiments, names):
-    sns.set()
-    colors = ['b', 'g', 'r']
-    plt.figure(figsize=(8, 6), dpi=80)
-    i = 0
-    for exp in experiments:
-        # Smooth curves
-        window = max(int(len(exp.episode_returns) / 50), 10)
-        if len(exp.episode_losses) < window + 2: return
-        returns = np.convolve(exp.episode_returns, np.ones(window) / window, 'valid')
-        # Determine x-axis based on samples or episodes
-        x_returns = [i + window for i in range(len(returns))]
-        plt.plot(x_returns, returns, colors[i], label=names[i])
-        plt.xlabel('environment steps' if exp.plot_train_samples else 'batch trainings')
-        plt.ylabel('episode return')
-        i+=1
-    plt.legend()
-#%%
-from Model.Experiments import ActorCriticExperimentRunning
 
 params = default_params()
-params['offpolicy_iterations'] = 128
+params['offpolicy_iterations'] = 32
 params['plot_train_samples'] = False
 params['plot_frequency'] = 4
-params['max_batch_episodes'] = int(70)
-params['batch_size'] = 32
+params['max_batch_episodes'] = int(50)
+params['batch_size'] = 500
 
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
@@ -151,18 +127,15 @@ model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
                          th.nn.Linear(128, 512), th.nn.ReLU(),
                          th.nn.Linear(512, 128), th.nn.ReLU(),
                          th.nn.Linear(128, n_actions + 1))
-experiment = ActorCriticExperimentRunning(params, model, learner=PPOLearner(model, params=params))
+# experiment = ActorCriticExperimentHeuristic(params, model, learner=PPOLearner(model, params=params))
+experiment = ActorCriticExperimentHeuristic(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
 
 # Re-executing this code-block picks up the experiment where you left off
 experiment.run()
 # except KeyboardInterrupt:
 #     experiment.close()
 # experiment.plot_training()
+
+print(experiment.episode_returns)
 #%%
 test_in_environment(experiment, env)
-#%%
-episode_returns = []
-episode_returns.append(experiment.test_in_env())
-print(np.mean(episode_returns[-10:]))
-print('Batch %.4g +- %.3g' % (np.mean(episode_returns[-10:]),
-                                                     np.std(episode_returns[-10:])))
