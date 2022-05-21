@@ -183,7 +183,8 @@ class ActorCriticExperiment(Experiment):
             if batch['episode_length'] is not None:
                 self.env_steps.append(env_steps)
                 self.episode_lengths.append(batch['episode_length'])
-                self.episode_returns.append(np.mean(batch['episode_reward']))
+                # self.episode_returns.append(np.mean(batch['episode_reward']))
+                self.episode_returns.append(batch['episode_reward'])
                 batch_episodes = batch['episodes_amount']
                 # Make a gradient update step
             loss = self.learner.train(batch['buffer'])
@@ -224,6 +225,7 @@ class ActorCriticExperimentRunning(Experiment):
         self.runner = Experiments_runner(self.controller, params=params)
         self.learner = ReinforceLearner(model, params=params) if learner is None else learner
         self.learner.set_controller(self.controller)
+        self.opposd = params.get('opposd', False)
 
     def close(self):
         """ Overrides Experiment.close() """
@@ -238,6 +240,10 @@ class ActorCriticExperimentRunning(Experiment):
         for e in range(self.max_batch_episodes):
             # Run the policy for batch_size steps
             batch = self.runner.run(self.batch_size, transition_buffer)
+            if self.opposd:
+                for _ in range(50):
+                    batch_w = self.runner.run(self.batch_size, transition_buffer)
+                    self.learner.update_policy_distribution(self.runner.batch_w['buffer'])
             # Make a gradient update step
             loss = self.learner.train(batch['buffer'])
             self.episode_losses.append(loss)

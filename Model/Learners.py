@@ -179,3 +179,77 @@ class PPOLearner(OffpolicyActorCriticLearner):
                 ppo_loss = th.clamp(ratios, 1 - self.ppo_clip_eps, 1 + self.ppo_clip_eps) * advantages.detach()
                 loss = th.min(loss, ppo_loss)
             return -loss.mean()
+
+class OPPOSDLearner(OffpolicyActorCriticLearner):
+    def __init__(self, model, controller=None, params={}):
+        super().__init__(model=model, controller=controller, params=params)
+        self.num_actions = params.get('num_actions', 5)
+        self.batch_size = params.get('batch_size')
+        self.states_shape = params.get('states_shape')
+        self.w_optimizer = th.optim.Adam(self.all_parameters, lr=params.get('lr', 5E-4))
+        self.w_grad_norm_clip = params.get('grad_norm_clip', 10)
+        self.pi_0 = 1 * th.ones(self.batch_size, 1) / self.num_actions
+        self.w_model = th.nn.Sequential(th.nn.Linear(self.states_shape, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 512), th.nn.ReLU(),
+                         th.nn.Linear(512, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1))
+
+    def train(self, batch):
+        assert self.controller is not None, "Before train() is called, a controller must be specified. "
+        self.model.train(True)
+        self.old_pi, loss_sum = None, 0.0
+
+        for _ in range(1 + self.offpolicy_iterations):
+            # Compute the model-output for given batch
+            out = self.model(batch['states'])  # compute both policy and values
+            val = out[:, -1].unsqueeze(dim=-1)  # last entry are the values
+            next_val = self.model(batch['next_states'])[:, -1].unsqueeze(dim=-1) if self.compute_next_val else None
+            pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1, index=batch['actions'])
+            w = self.w_model(batch['states'])
+            z = w / th.mean(w)
+            # Combine policy and value loss
+            loss = self._policy_loss(pi * z, self._advantages(batch, val, next_val)) \
+                   + self.value_loss_param * self._value_loss(batch, val, next_val)
+            # Backpropagate loss
+            self.optimizer.zero_grad()
+            loss.backward()
+            grad_norm = th.nn.utils.clip_grad_norm_(self.all_parameters, self.grad_norm_clip)
+            self.optimizer.step()
+            loss_sum += loss.item()
+        return loss_sum
+
+    def _policy_loss(self, pi, advantages):
+        # The loss for off-policy data
+        ratios = pi / self.pi_0.detach()
+
+        loss = advantages.detach() * ratios
+        return -loss.mean()
+
+    def update_policy_distribution(self, batch):
+        self.w_model.train(True)
+
+        next_states = batch['next_states']
+        out = self.model(batch['states'])
+        pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1, index=batch['actions'])
+        ratios = pi.detach() / self.pi_0
+
+        w = self.w_model(batch['states'])
+        w_ = self.w_model(batch['next_states'])
+
+        z = th.mean(w)
+
+        d = w * ratios - w_
+        d /= z
+
+        D = th.tensor(0)
+        for i in range(len(d)):
+            for j in range(len(d)):
+                k = (th.sqrt(th.pow(next_states[i] - next_states[j], 2))<1).float()
+                D += d[i]*d[j] * k
+        D /= len(d)
+
+        self.w_optimizer.zero_grad()
+        D.backward()
+        self.w_optimizer.step()
+
+
