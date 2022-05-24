@@ -319,3 +319,23 @@ class Heuristic_runner(Runner):
             action = 1
 
         return action
+
+    def get_probabilities(self, state):
+        actions_prob = th.empty(0)
+        for row in state:
+            if abs(row) > 27e-3:
+                actions_prob = th.cat([actions_prob, th.tensor([[0, 0, 0, 0, 1]])], dim=0)
+
+            elif abs(row) > 22e-3:
+                actions_prob = th.cat([actions_prob, th.tensor([[0, 0, 0, 1, 0]])], dim=0)
+
+            elif abs(row) > 15e-3:
+                actions_prob = th.cat([actions_prob, th.tensor([[0, 0, 1, 0, 0]])], dim=0)
+
+            elif abs(row) > 11e-3:
+                actions_prob = th.cat([actions_prob, th.tensor([[0, 1, 0, 0, 0]])], dim=0)
+
+            else:
+                actions_prob = th.cat([actions_prob, th.tensor([[1, 0, 0, 0, 0]])], dim=0)
+
+        return actions_prob

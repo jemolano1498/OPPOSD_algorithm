@@ -244,7 +244,7 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
         D = th.tensor(0)
         for i in range(len(d)):
             for j in range(len(d)):
-                k = (th.sqrt(th.pow(next_states[i] - next_states[j], 2))<1).float()
+                k = (th.linalg.norm(next_states[i] - next_states[j])<1).float()
                 D += d[i]*d[j] * k
         D /= len(d)
 

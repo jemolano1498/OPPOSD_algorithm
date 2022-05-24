@@ -243,7 +243,7 @@ class ActorCriticExperimentRunning(Experiment):
             if self.opposd:
                 for _ in range(50):
                     batch_w = self.runner.run(self.batch_size, transition_buffer)
-                    self.learner.update_policy_distribution(self.runner.batch_w['buffer'])
+                    self.learner.update_policy_distribution(batch_w['buffer'])
             # Make a gradient update step
             loss = self.learner.train(batch['buffer'])
             self.episode_losses.append(loss)
