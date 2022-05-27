@@ -33,9 +33,12 @@ class MathModel:
 
 
 class PaceSimulator:
-    def __init__(self):
+    def __init__(self, initial_pace=None):
         self.time_step = 0
-        self.last_value = None
+        if initial_pace:
+            self.time_step = 1
+
+        self.last_value = initial_pace
         self.current_model = None
         self.models = [None] * 4
 

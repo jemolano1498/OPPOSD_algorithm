@@ -91,3 +91,19 @@ class ACController(QController):
     def choose(self, observation, **kwargs):
         return th.distributions.Categorical(probs=self.probabilities(observation, **kwargs)).sample()
 
+class Experiments_controller:
+    def __init__(self, controller, params={}, exploration_step=1):
+        self.controller = controller
+        self.num_actions = controller.num_actions
+        self.max_eps = params.get('epsilon_start', 1.0)
+
+    def choose(self, observation, increase_counter=True, **kwargs):
+        """ Returns the (possibly random) actions the agent takes when faced with "observation".
+            Decays epsilon only when increase_counter=True". """
+        return self.controller.choose(observation, **kwargs)
+
+    def probabilities(self, observation, **kwargs):
+        """ Returns the probabilities with which the agent would choose actions. """
+        eps = self.max_eps
+        return eps * th.ones(1, 1) / self.num_actions + \
+               (1 - eps) * self.controller.probabilities(observation, **kwargs)
