@@ -135,9 +135,12 @@ class TransitionBatch:
         finally:
             self.lock.release()
 
-    def sample(self):
+
+    def sample(self, batch_size=0):
         """ Samples a random mini-batch from the batch. """
-        return self[th.randint(high=self.size, size=(self.batch_size, 1))]
+        if batch_size==0:
+            batch_size = self.batch_size
+        return self[th.randint(high=self.size, size=(batch_size, 1))]
 
     def __len__(self):
         """ Returns the length of the batch. """

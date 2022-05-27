@@ -119,7 +119,7 @@ class Runner:
 class Experiments_runner(Runner):
     def __init__(self, controller, params={}, exploration_step=1):
         super().__init__(controller, params, exploration_step)
-        self.experiments_transition_buffer = TransitionBatch(5000, self.transition_format())
+        self.experiments_transition_buffer = TransitionBatch(int(5000), self.transition_format())
         self.fill_transition_buffer()
 
     def fill_transition_buffer(self):

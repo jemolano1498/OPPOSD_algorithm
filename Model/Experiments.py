@@ -4,7 +4,7 @@ from Controllers import QController, Experiments_controller
 from Controllers import EpsilonGreedyController
 from Controllers import ACController
 from Runner import Runner, Experiments_runner, Heuristic_runner
-from Learners import QLearner
+from Learners import QLearner, BatchReinforceLearner
 from Learners import ReinforceLearner
 from TransitionBatch import TransitionBatch
 # Plotting
@@ -33,40 +33,19 @@ class Experiment:
         """ Plots logged training results. Use "update=True" if the plot is continuously updated
             or use "update=False" if this is the final call (otherwise there will be double plotting). """
         # Smooth curves
-        window = max(int(len(self.episode_returns) / 50), 10)
-        if len(self.episode_losses) < window + 2: return
+        window = max(int(len(self.episode_returns) / 3), 1)
         returns = np.convolve(self.episode_returns, np.ones(window) / window, 'valid')
-        lengths = np.convolve(self.episode_lengths, np.ones(window) / window, 'valid')
-        losses = np.convolve(self.episode_losses, np.ones(window) / window, 'valid')
-        env_steps = np.convolve(self.env_steps, np.ones(window) / window, 'valid')
         # Determine x-axis based on samples or episodes
-        if self.plot_train_samples:
-            x_returns = env_steps
-            x_losses = env_steps[(len(env_steps) - len(losses)):]
-        else:
-            x_returns = [i + window for i in range(len(returns))]
-            x_losses = [i + len(returns) - len(losses) + window for i in range(len(losses))]
+        x_returns = [(i + window) for i in range(len(returns))]
         # Create plot
         colors = ['b', 'g', 'r']
-        fig = plt.gcf()
-        fig.set_size_inches(16, 4)
+        # fig.set_size_inches(16, 4)
         plt.clf()
         # Plot the losses in the left subplot
-        pl.subplot(1, 3, 1)
-        pl.plot(x_returns, returns, colors[0])
-        pl.xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
-        pl.ylabel('episode return')
-        # Plot the episode lengths in the middle subplot
-        ax = pl.subplot(1, 3, 2)
-        ax.plot(x_returns, lengths, colors[1])
-        ax.set_xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
-        ax.set_ylabel('episode length')
-        # Plot the losses in the right subplot
-        ax = pl.subplot(1, 3, 3)
-        ax.plot(x_losses, losses, colors[2])
-        ax.set_xlabel('environment steps' if self.plot_train_samples else 'batch trainings')
-        ax.set_ylabel('loss')
-        # dynamic plot update
+        # pl.subplot(1, 3, 1)
+        plt.plot(x_returns, returns, colors[0])
+        plt.xlabel('Environment steps' if self.plot_train_samples else 'Policy gradient steps')
+        plt.ylabel('Episode return')
         display.clear_output(wait=True)
         if update:
             display.display(pl.gcf())
@@ -79,7 +58,6 @@ class Experiment:
     def run(self):
         """ Starts (or continues) the experiment. """
         assert False, "You need to extend the Expeirment class and override the method run(). "
-
 
 class QLearningExperiment(Experiment):
     """ Experiment that perfoms DQN. You can provide your own learner. """
@@ -211,6 +189,140 @@ class ActorCriticExperiment(Experiment):
             #                np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
             #                np.mean(self.episode_losses[-100:])))
 
+class BatchActorCriticExperiment(Experiment):
+    def __init__(self, params, model, learner=None, **kwargs):
+        super().__init__(params, model, **kwargs)
+        self.max_episodes = params.get('max_episodes', int(1E6))
+        self.max_batch_episodes = params.get('max_batch_episodes', int(1E6))
+        self.max_steps = params.get('max_steps', int(1E9))
+        self.grad_repeats = params.get('grad_repeats', 1)
+        self.batch_size = params.get('batch_size', 1e5)
+        self.mini_batch_size = params.get('mini_batch_size', 200)
+        self.controller = ACController(model, num_actions=params.get('num_actions'), params=params)
+        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        self.runner = Experiments_runner(self.controller, params=params)
+        self.learner = BatchReinforceLearner(model, params=params) if learner is None else learner
+        self.learner.set_controller(self.controller)
+        self.opposd = params.get('opposd', False)
+        self.opposd_iterations = params.get('opposd_iterations', 50)
+
+    def get_transition_batch(self):
+        transition_buffer = TransitionBatch(self.batch_size, self.runner.transition_format(), self.mini_batch_size)
+        batch = self.runner.experiments_transition_buffer
+        return batch
+
+    def close(self):
+        """ Overrides Experiment.close() """
+        self.runner.close()
+
+    def run(self, batch=None):
+        """ Overrides Experiment.run() """
+        # Plot past results if available
+        if self.plot_frequency is not None and len(self.episode_losses) > 2:
+            self.plot_training(update=True)
+        # Run the experiment
+        if not batch:
+            batch = self.get_transition_batch()
+        for e in range(self.max_batch_episodes):
+            # Make a gradient update step
+            self.learner.train(batch)
+
+            for _ in range(10):
+                partial_result = self.test_in_env()
+                self.episode_returns.append(partial_result)
+
+            if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0:
+                self.plot_training(update=True)
+                if self.print_when_plot:
+                    print('Batch %u, epi-return %.4g +- %.3g' %
+                          (len(self.episode_returns), np.mean(self.episode_returns[-10:]),
+                           np.std(self.episode_returns[-10:])))
+
+    def test_in_env(self):
+        rewards = []
+
+        for _ in range(10):
+        # for _ in range(self.plot_frequency):
+            state = self.runner.env.reset()
+            done = False
+            score = 0
+            while not done:
+                action = self.controller.choose(state, increase_counter=False).detach().item()
+                # action = 1
+                new_state, reward, done = self.runner.env.step(action)
+                score += reward
+                state = new_state
+            rewards.append(score)
+
+        return np.mean(score)
+
+class BatchHeuristicActorCriticExperiment(Experiment):
+    def __init__(self, params, model, learner=None, **kwargs):
+        super().__init__(params, model, **kwargs)
+        self.max_episodes = params.get('max_episodes', int(1E6))
+        self.max_batch_episodes = params.get('max_batch_episodes', int(1E6))
+        self.max_steps = params.get('max_steps', int(1E9))
+        self.grad_repeats = params.get('grad_repeats', 1)
+        self.batch_size = params.get('batch_size', 1e5)
+        self.mini_batch_size = params.get('mini_batch_size', 200)
+        self.controller = ACController(model, num_actions=params.get('num_actions'), params=params)
+        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        self.runner = Heuristic_runner(self.controller, params=params)
+        self.learner = BatchReinforceLearner(model, params=params) if learner is None else learner
+        self.learner.set_controller(self.controller)
+        self.opposd = params.get('opposd', False)
+        self.opposd_iterations = params.get('opposd_iterations', 50)
+
+    def get_transition_batch(self):
+        transition_buffer = TransitionBatch(self.batch_size, self.runner.transition_format(), self.mini_batch_size)
+        batch = self.runner.run(self.batch_size, transition_buffer)
+        return batch
+
+    def close(self):
+        """ Overrides Experiment.close() """
+        self.runner.close()
+
+    def run(self, batch=None):
+        """ Overrides Experiment.run() """
+        # Plot past results if available
+        if self.plot_frequency is not None and len(self.episode_losses) > 2:
+            self.plot_training(update=True)
+        # Run the experiment
+        if not batch:
+            batch = self.get_transition_batch()
+        for e in range(self.max_batch_episodes):
+            # Make a gradient update step
+            self.learner.train(batch["buffer"])
+
+            for _ in range(10):
+                partial_result = self.test_in_env()
+                self.episode_returns.append(partial_result)
+
+            if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0:
+                self.plot_training(update=True)
+                if self.print_when_plot:
+                    print('Batch %u, epi-return %.4g +- %.3g' %
+                          (len(self.episode_returns), np.mean(self.episode_returns[-10:]),
+                           np.std(self.episode_returns[-10:])))
+
+    def test_in_env(self):
+        rewards = []
+
+        for _ in range(10):
+        # for _ in range(self.plot_frequency):
+            state = self.runner.env.reset()
+            done = False
+            score = 0
+            while not done:
+                action = self.controller.choose(state, increase_counter=False).detach().item()
+                # action = 1
+                new_state, reward, done = self.runner.env.step(action)
+                score += reward
+                state = new_state
+            rewards.append(score)
+
+        return np.mean(score)
+
 class ActorCriticExperimentRunning(Experiment):
     def __init__(self, params, model, learner=None, **kwargs):
         super().__init__(params, model, **kwargs)
@@ -265,7 +377,7 @@ class ActorCriticExperimentRunning(Experiment):
             or use "update=False" if this is the final call (otherwise there will be double plotting). """
         # Smooth curves
         # window = max(int(len(self.episode_returns) / 50), 10)
-        window = max(int(len(self.episode_returns) / 3), 1)
+        window = max(int(len(self.episode_returns) / 20), 2)
 
         returns = np.convolve(self.episode_returns, np.ones(window) / window, 'valid')
 
