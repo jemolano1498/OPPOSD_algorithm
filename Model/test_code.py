@@ -1,18 +1,21 @@
+#%%
 # Pytorch and tools
 import torch as th
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
 from RunningEnv import EnvWrapper
-from Experiments import ActorCriticExperiment, BatchHeuristicActorCriticExperiment
+from Experiments import ActorCriticExperiment, BatchActorCriticExperiment, BatchHeuristicActorCriticExperiment, ActorCriticExperimentRunning
 from Learners import ReinforceLearner
-from Learners import OffpolicyActorCriticLearner
-from Learners import PPOLearner
-from Model.Experiments import ActorCriticExperimentRunning
-
+from Learners import OffpolicyActorCriticLearner, PPOLearner, OPPOSDLearner
+#%%
 pref_pace = 181
 target_pace = pref_pace * 1.1
-
+#%%
+batch_episodes = 600
+start_epsilon = 0.05
+file_name = 'OFFPAC_heuristic'
+experiments=[]
+#%%
 def default_params():
     """ These are the default parameters used int eh framework. """
     return {  # Debugging outputs and plotting during training
@@ -61,7 +64,16 @@ def default_params():
         'states_shape': (1,),  # Amount of states
         'num_actions': 5,  # Possible actions
     }
+#%%
+values = np.empty(0)
+def save_values(experiment):
+    global values
+    if values.size == 0:
+        values = np.append(values, experiment['experiment'].episode_returns)
+    else:
+        values = np.stack((values, experiment['experiment'].episode_returns))
 
+    np.savetxt("%s.csv"%file_name, values, delimiter=",")
 def test_in_environment(experiment, env):
     state = env.reset()
     try_scores = []
@@ -117,32 +129,15 @@ def test_in_environment(experiment, env):
 
     print(np.sum(env.rewards))
 
-def plot_experiments(experiments, names):
-    sns.set()
-    colors = ['b', 'g', 'r']
-    plt.figure(figsize=(8, 6), dpi=80)
-    i = 0
-    for exp in experiments:
-        # Smooth curves
-        window = max(int(len(exp.episode_returns) / 50), 10)
-        if len(exp.episode_losses) < window + 2: return
-        returns = np.convolve(exp.episode_returns, np.ones(window) / window, 'valid')
-        # Determine x-axis based on samples or episodes
-        x_returns = [i + window for i in range(len(returns))]
-        plt.plot(x_returns, returns, colors[i], label=names[i])
-        plt.xlabel('environment steps' if exp.plot_train_samples else 'batch trainings')
-        plt.ylabel('episode return')
-        i+=1
-    plt.legend()
-
-from Model.Learners import OPPOSDLearner
-from Model.Experiments import BatchActorCriticExperiment
-
+#%% md
+### Heuristic Policy
+#%%
 params = default_params()
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
-params['batch_size'] = int(10000)
+params['batch_size'] = int(1e5)
 params['mini_batch_size'] = 200
+params['epsilon_start'] = start_epsilon
 
 # The model has n_action policy heads and one value head
 model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
@@ -151,19 +146,19 @@ model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
                          th.nn.Linear(128, n_actions + 1))
 experiment = BatchHeuristicActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
 experiments_batch = experiment.get_transition_batch()
-
+#%%
 return_dict = {}
 params = default_params()
 params['offpolicy_iterations'] = 10
 params['plot_train_samples'] = False
 params['plot_frequency'] = 4
-params['max_batch_episodes'] = int(200)
+params['max_batch_episodes'] = int(batch_episodes)
 params['batch_size'] = int(1e5)
 params['mini_batch_size'] = 200
-params['opposd'] = True
-params['heuristic'] = True
+params['opposd'] = False
+params['heuristic'] = False
 params['opposd_iterations'] = 50
-params['epsilon_start'] = 0.05
+params['epsilon_start'] = start_epsilon
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
 
@@ -172,12 +167,155 @@ model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
                          th.nn.Linear(128, 512), th.nn.ReLU(),
                          th.nn.Linear(512, 128), th.nn.ReLU(),
                          th.nn.Linear(128, n_actions + 1))
-experiment = BatchHeuristicActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
+experiment = BatchHeuristicActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
 try:
     experiment.run(experiments_batch)
 except KeyboardInterrupt:
     experiment.close()
-experiment.plot_training()
 
-return_dict.update({'model' : 'OPPOSD',
+return_dict.update({'model' : 'OFFPAC heuristic',
                             'experiment': experiment})
+experiments = np.append(experiments, return_dict)
+save_values(return_dict)
+#%%
+# return_dict = {}
+# params = default_params()
+# params['offpolicy_iterations'] = 10
+# params['plot_train_samples'] = False
+# params['plot_frequency'] = 4
+# params['max_batch_episodes'] = int(batch_episodes)
+# params['batch_size'] = int(1e5)
+# params['mini_batch_size'] = 200
+# params['opposd'] = False
+# params['heuristic'] = False
+# params['opposd_iterations'] = 50
+# params['epsilon_start'] = start_epsilon
+# env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+# n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+#
+# # The model has n_action policy heads and one value head
+# model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, 512), th.nn.ReLU(),
+#                          th.nn.Linear(512, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, n_actions + 1))
+# experiment = BatchHeuristicActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
+# try:
+#     experiment.run(experiments_batch)
+# except KeyboardInterrupt:
+#     experiment.close()
+#
+# return_dict.update({'model' : 'OPPOSD heuristic',
+#                             'experiment': experiment})
+# experiments = np.append(experiments, return_dict)
+# save_values(return_dict)
+
+# #%% md
+# ## From Experiments
+# #%%
+
+# params = default_params()
+# env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+# n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+# params['batch_size'] = int(4500)
+# params['mini_batch_size'] = 200
+# params['epsilon_start'] = start_epsilon
+#
+# # The model has n_action policy heads and one value head
+# model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, 512), th.nn.ReLU(),
+#                          th.nn.Linear(512, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, n_actions + 1))
+# experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
+# experiments_batch = experiment.get_transition_batch()
+# #%%
+# return_dict = {}
+# params = default_params()
+# params['offpolicy_iterations'] = 10
+# params['plot_train_samples'] = False
+# params['plot_frequency'] = 4
+# params['max_batch_episodes'] = int(batch_episodes)
+# params['batch_size'] = int(1e5)
+# params['mini_batch_size'] = 200
+# params['opposd'] = True
+# params['opposd_iterations'] = 50
+# params['epsilon_start'] = start_epsilon
+# env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+# n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+#
+# # The model has n_action policy heads and one value head
+# model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, 512), th.nn.ReLU(),
+#                          th.nn.Linear(512, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, n_actions + 1))
+# experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
+# try:
+#     experiment.run(experiments_batch)
+# except KeyboardInterrupt:
+#     experiment.close()
+#
+# return_dict.update({'model' : 'OPPOSD',
+#                             'experiment': experiment})
+# experiments = np.append(experiments, return_dict)
+# save_values(return_dict)
+# #%%
+# return_dict = {}
+# params = default_params()
+# params['offpolicy_iterations'] = 10
+# params['plot_train_samples'] = False
+# params['plot_frequency'] = 4
+# params['max_batch_episodes'] = int(batch_episodes)
+# params['batch_size'] = int(1e5)
+# params['mini_batch_size'] = 200
+# params['opposd'] = False
+# params['opposd_iterations'] = 50
+# params['epsilon_start'] = start_epsilon
+# env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+# n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+#
+# # The model has n_action policy heads and one value head
+# model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, 512), th.nn.ReLU(),
+#                          th.nn.Linear(512, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, n_actions + 1))
+# experiment = BatchActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
+# try:
+#     experiment.run(experiments_batch)
+# except KeyboardInterrupt:
+#     experiment.close()
+#
+# return_dict.update({'model' : 'OFFPAC',
+#                             'experiment': experiment})
+# experiments = np.append(experiments, return_dict)
+# save_values(return_dict)
+# #%%
+# return_dict = {}
+# params = default_params()
+# params['offpolicy_iterations'] = 10
+# params['plot_train_samples'] = False
+# params['plot_frequency'] = 4
+# params['max_batch_episodes'] = int(batch_episodes)
+# params['batch_size'] = int(1e5)
+# params['mini_batch_size'] = 200
+# params['opposd'] = False
+# params['opposd_iterations'] = 50
+# params['epsilon_start'] = start_epsilon
+# env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+# n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+#
+# # The model has n_action policy heads and one value head
+# model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, 512), th.nn.ReLU(),
+#                          th.nn.Linear(512, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, n_actions + 1))
+# experiment = BatchActorCriticExperiment(params, model, learner=PPOLearner(model, params=params))
+# try:
+#     experiment.run(experiments_batch)
+# except KeyboardInterrupt:
+#     experiment.close()
+#
+# return_dict.update({'model' : 'PPO',
+#                             'experiment': experiment})
+# experiments = np.append(experiments, return_dict)
+# save_values(return_dict)
+
+

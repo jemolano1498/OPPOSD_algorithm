@@ -127,6 +127,7 @@ class Experiments_runner(Runner):
         max_steps = 5000
 
         data_folder_path = "~/Documents/THESIS/Project_Juan/"
+        # data_folder_path = "/home/nfs/jmolano/THESIS/Project_Juan/"
         exp_batch = [16, 10]
         tests = [['PNPpref', 'PNPfast'], ['CP103', 'IP103', 'CP110', 'IP110']]
         t = 0
