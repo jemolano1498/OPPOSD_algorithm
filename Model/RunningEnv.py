@@ -132,9 +132,13 @@ class EnvWrapper:
             self.steps = self.steps + 1
             if self.steps > self.max_steps:
                 done = 1
+            # Normalize output state values
+            new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
             return new_state, reward, done
         if self.steps > self.max_steps:
             done = 1
+        # Normalize output state values
+        new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
         return new_state, np.array([round(reward)], dtype=np.float), np.array([done])
 
     def reset(self):
@@ -144,7 +148,7 @@ class EnvWrapper:
         self.rewards = np.empty(0)
         self.env_pacing = np.empty(0)
         self.steps = 0
-        return self.running_env.step(0, self.target_pace)[1]
+        return (self.running_env.step(0, self.target_pace)[1] - (-0.010204584316159032)) / (0.05290357993014821)
 
     def close(self):
         pass

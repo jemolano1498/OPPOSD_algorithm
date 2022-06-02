@@ -199,7 +199,7 @@ class BatchActorCriticExperiment(Experiment):
         self.batch_size = params.get('batch_size', 1e5)
         self.mini_batch_size = params.get('mini_batch_size', 200)
         self.controller = ACController(model, num_actions=params.get('num_actions'), params=params)
-        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        # self.controller = EpsilonGreedyController(controller=self.controller, params=params)
         self.runner = Experiments_runner(self.controller, params=params)
         self.learner = BatchReinforceLearner(model, params=params) if learner is None else learner
         self.learner.set_controller(self.controller)
@@ -232,7 +232,7 @@ class BatchActorCriticExperiment(Experiment):
                 self.episode_returns.append(partial_result)
 
             if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0:
-                self.plot_training(update=True)
+                # self.plot_training(update=True)
                 if self.print_when_plot:
                     print('Batch %u, epi-return %.4g +- %.3g' %
                           (len(self.episode_returns), np.mean(self.episode_returns[-10:]),
@@ -299,7 +299,7 @@ class BatchHeuristicActorCriticExperiment(Experiment):
                 self.episode_returns.append(partial_result)
 
             if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0:
-                self.plot_training(update=True)
+                # self.plot_training(update=True)
                 if self.print_when_plot:
                     print('Batch %u, epi-return %.4g +- %.3g' %
                           (len(self.episode_returns), np.mean(self.episode_returns[-10:]),

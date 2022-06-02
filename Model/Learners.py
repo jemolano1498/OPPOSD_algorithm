@@ -116,7 +116,7 @@ class BatchReinforceLearner:
         self.grad_norm_clip = params.get('grad_norm_clip', 10)
         self.compute_next_val = False  # whether the next state's value is computed
         self.opposd = params.get('opposd', False)
-        self.heuristic = params.get('heuristic', False)
+        # self.heuristic = params.get('heuristic', False)
         self.num_actions = params.get('num_actions', 5)
         self.old_pi = th.ones(1, 1) / self.num_actions
         self.pi_0 = None
@@ -152,8 +152,8 @@ class BatchReinforceLearner:
                     # batch_w = self.runner.run(self.batch_size, transition_buffer)
                     batch_w = batch.sample(200)
                     self.pi_0 = self.old_pi + 0 * batch_w['returns']
-                    if self.heuristic:
-                        self.pi_0 = self.get_probabilities(batch_w['states']).gather(dim=-1, index=batch_w['actions']).detach()
+                    # if self.heuristic:
+                    #     self.pi_0 = self.get_probabilities(batch_w['states']).gather(dim=-1, index=batch_w['actions']).detach()
                     # Compute the model-output for given batch
                     out = self.model(batch_w['states'])  # compute both policy and values
                     pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1,
@@ -170,8 +170,8 @@ class BatchReinforceLearner:
                                                                                      index=batch_ac['actions'])
 
             self.pi_0 = self.old_pi + 0 * batch_ac['returns']
-            if self.heuristic:
-                self.pi_0 = self.get_probabilities(batch_ac['states']).gather(dim=-1, index=batch_ac['actions']).detach()
+            # if self.heuristic:
+            #     self.pi_0 = self.get_probabilities(batch_ac['states']).gather(dim=-1, index=batch_ac['actions']).detach()
             if self.opposd:
                 w = self.w_model(batch_ac['states']).detach()
                 w /= th.mean(w)
@@ -192,16 +192,17 @@ class BatchReinforceLearner:
     def get_probabilities(self, state):
         actions_prob = th.empty(0)
         for row in state:
-            if abs(row) > 27e-3:
+            val = row - 0.1
+            if abs(val) > 0.6032526790300863:
                 actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.01, 0.01, 0.01, 0.96]])], dim=0)
 
-            elif abs(row) > 22e-3:
+            elif abs(val) > 0.5087411165497815:
                 actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.01, 0.01, 0.96, 0.01]])], dim=0)
 
-            elif abs(row) > 15e-3:
+            elif abs(val) > 0.37642492907735484:
                 actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.01, 0.96, 0.01, 0.01]])], dim=0)
 
-            elif abs(row) > 11e-3:
+            elif abs(val) > 0.1883564663640196:
                 actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.96, 0.01, 0.01, 0.01]])], dim=0)
 
             else:
@@ -244,7 +245,7 @@ class ActorCriticLearner(BiasedReinforceLearner):
         """ Computes the advantages, Q-values or returns for the policy loss. """
         advantages = None
         if self.advantage_bootstrap:
-            advantages = batch['rewards'] + self.gamma * (~batch['dones'] * next_values)
+            advantages = batch['rewards']+ self.gamma * (~batch['dones']* next_values)
         else:
             advantages = batch['returns']
         if self.advantage_bias:
@@ -307,12 +308,13 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
         return -loss.mean()
 
     def reset_w_net(self):
-        self.w_model = th.nn.Sequential(th.nn.Linear(self.states_shape, 128), th.nn.ReLU(),
-                                        th.nn.Linear(128, 512), th.nn.ReLU(),
-                                        th.nn.Linear(512, 128), th.nn.ReLU(),
-                                        th.nn.Linear(128, 1))
-        self.w_parameters = list(self.w_model.parameters())
-        self.w_optimizer = th.optim.Adam(self.w_parameters, lr=params.get('lr', 5E-4))
+        pass
+        # self.w_model = th.nn.Sequential(th.nn.Linear(self.states_shape, 128), th.nn.ReLU(),
+        #                                 th.nn.Linear(128, 512), th.nn.ReLU(),
+        #                                 th.nn.Linear(512, 128), th.nn.ReLU(),
+        #                                 th.nn.Linear(128, 1))
+        # self.w_parameters = list(self.w_model.parameters())
+        # self.w_optimizer = th.optim.Adam(self.w_parameters, lr=params.get('lr', 5E-4))
 
     def update_policy_distribution(self, batch, ratios):
         self.w_model.train(True)
@@ -330,9 +332,9 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
 
             k = th.zeros(batch_size, batch_size, self.states_shape[0])
             for i in range(self.states_shape[0]):
-                k[:, :, i] = next_states[:, i].view(1, -1) - next_states[:, i].view(-1, 1)
+                k[:, :, i] = (next_states[:, i].view(1, -1) - next_states[:, i].view(-1, 1))**2
 
-            k = (th.linalg.norm(k, dim=-1) < 1).float()
+            k = th.exp(-k/2)
             prod = th.matmul(d, d.transpose(0, 1))
 
             # n_lm = 3

@@ -127,6 +127,7 @@ class Experiments_runner(Runner):
         max_steps = 5000
 
         data_folder_path = "~/Documents/THESIS/Project_Juan/"
+        # data_folder_path = "/home/nfs/jmolano/THESIS/Project_Juan/"
         exp_batch = [16, 10]
         tests = [['PNPpref', 'PNPfast'], ['CP103', 'IP103', 'CP110', 'IP110']]
         t = 0
@@ -170,6 +171,7 @@ class Experiments_runner(Runner):
                         else:
                             avg_pace = state_func.get_next_state(row[2])
                             n_state = (avg_pace / target_pace) - 1
+                            n_state = (n_state - (-0.010204584316159032)) / (0.05290357993014821)
 
                             if timestep == 0:
                                 state = n_state
@@ -297,6 +299,7 @@ class Heuristic_runner(Runner):
 
     def select_action(self, state):
         avg_pace = state[0]
+        val = avg_pace - 0.1
         action = 0
 
         # Initial waiting time
@@ -306,16 +309,16 @@ class Heuristic_runner(Runner):
                 self.initial_completed = True
             return action
 
-        if abs(avg_pace) > 27e-3:
+        if abs(val) > 0.6032526790300863:
             action = 4
 
-        elif abs(avg_pace) > 22e-3:
+        elif abs(val) > 0.5087411165497815:
             action = 3
 
-        elif abs(avg_pace) > 15e-3:
+        elif abs(val) > 0.37642492907735484:
             action = 2
 
-        elif abs(avg_pace) > 11e-3:
+        elif abs(val) > 0.1883564663640196:
             action = 1
 
         return action
@@ -323,19 +326,20 @@ class Heuristic_runner(Runner):
     def get_probabilities(self, state):
         actions_prob = th.empty(0)
         for row in state:
-            if abs(row) > 27e-3:
-                actions_prob = th.cat([actions_prob, th.tensor([[0, 0, 0, 0, 1]])], dim=0)
+            val = row - 0.1
+            if abs(val) > 0.6032526790300863:
+                actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.01, 0.01, 0.01, 0.96]])], dim=0)
 
-            elif abs(row) > 22e-3:
-                actions_prob = th.cat([actions_prob, th.tensor([[0, 0, 0, 1, 0]])], dim=0)
+            elif abs(val) > 0.5087411165497815:
+                actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.01, 0.01, 0.96, 0.01]])], dim=0)
 
-            elif abs(row) > 15e-3:
-                actions_prob = th.cat([actions_prob, th.tensor([[0, 0, 1, 0, 0]])], dim=0)
+            elif abs(val) > 0.37642492907735484:
+                actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.01, 0.96, 0.01, 0.01]])], dim=0)
 
-            elif abs(row) > 11e-3:
-                actions_prob = th.cat([actions_prob, th.tensor([[0, 1, 0, 0, 0]])], dim=0)
+            elif abs(val) > 0.1883564663640196:
+                actions_prob = th.cat([actions_prob, th.tensor([[0.01, 0.96, 0.01, 0.01, 0.01]])], dim=0)
 
             else:
-                actions_prob = th.cat([actions_prob, th.tensor([[1, 0, 0, 0, 0]])], dim=0)
+                actions_prob = th.cat([actions_prob, th.tensor([[0.96, 0.01, 0.01, 0.01, 0.01]])], dim=0)
 
         return actions_prob
