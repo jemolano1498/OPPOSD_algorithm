@@ -93,7 +93,7 @@ class RunningEnv:
         self.current_timer = Timer(self.time_limit)
 
 
-class EnvWrapper:
+class EnvWrapper_2:
     def __init__(self, pref_pace, target_pace):
         self.times = [0, 20, 25, 30, 40]
         self.pref_pace = pref_pace
@@ -137,6 +137,83 @@ class EnvWrapper:
             return new_state, reward, done
         if self.steps > self.max_steps:
             done = 1
+        # Normalize output state values
+        new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
+        return new_state, np.array([round(reward)], dtype=np.float), np.array([done])
+
+    def reset(self):
+        self.running_env.reset()
+        self.state_traj = np.empty(0)
+        self.pace = np.empty(0)
+        self.rewards = np.empty(0)
+        self.env_pacing = np.empty(0)
+        self.steps = 0
+        return (self.running_env.step(0, self.target_pace)[1] - (-0.010204584316159032)) / (0.05290357993014821)
+
+    def close(self):
+        pass
+
+class EnvWrapper:
+    def __init__(self, pref_pace, target_pace):
+        self.times = [0, 20, 25, 30, 40]
+        self.pref_pace = pref_pace
+        self.target_pace = target_pace
+        self.running_env = RunningEnv(pref_pace, 1)
+
+        self.tresshold = 0.0225
+
+        self.max_steps = 500
+
+        self.state_traj = np.empty(0)
+        self.pace = np.empty(0)
+        self.rewards = np.empty(0)
+        self.env_pacing = np.empty(0)
+
+        self.steps = 0
+
+    def step(self, action):
+        reward = 1
+        done = 0
+        extra_pace = 0
+        new_state = []
+        prev_states = []
+        for i in range(self.times[action]):
+            current_pace, new_state, _, real_pacing, _ = self.running_env.step(1, self.target_pace, extra_pace)
+            prev_states = np.append(prev_states, new_state)
+            self.state_traj = np.append(self.state_traj, (new_state[0] + 1) * self.target_pace)
+            self.pace = np.append(self.pace, current_pace)
+            self.rewards = np.append(self.rewards, -1)
+            self.env_pacing = np.append(self.env_pacing, real_pacing)
+            self.steps = self.steps + 1
+            # reward = reward - 1
+        if action == 0:
+            current_pace, new_state, _, real_pacing, done = self.running_env.step(0, self.target_pace)
+            self.state_traj = np.append(self.state_traj, (new_state[0] + 1) * self.target_pace)
+            self.pace = np.append(self.pace, current_pace)
+            self.env_pacing = np.append(self.env_pacing, real_pacing)
+            self.steps = self.steps + 1
+            if self.steps > self.max_steps:
+                done = 1
+
+            if abs(new_state[0]) > 0.015:
+                reward = -1
+            elif abs(new_state[0]) < 0.002:
+                reward = 1
+            else:
+                reward = 0
+
+            self.rewards = np.append(self.rewards, reward)
+            # Normalize output state values
+            new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
+            return new_state, np.array([round(reward)], dtype=np.float), done
+        if self.steps > self.max_steps:
+            done = 1
+        if abs(new_state[0]) > 0.0225:
+            reward = -1
+        elif math.sqrt((new_state[0] - (prev_states[0]))**2) < 0.01:
+            reward = -1
+        else:
+            reward = 2
         # Normalize output state values
         new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
         return new_state, np.array([round(reward)], dtype=np.float), np.array([done])

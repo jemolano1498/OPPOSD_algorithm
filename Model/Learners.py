@@ -210,7 +210,8 @@ class BatchReinforceLearner:
 
         return actions_prob
 
-class BiasedReinforceLearner(BatchReinforceLearner):
+# class BiasedReinforceLearner(BatchReinforceLearner):
+class BiasedReinforceLearner(ReinforceLearner):
     def __init__(self, model, controller=None, params={}):
         super().__init__(model=model, controller=controller, params=params)
         self.value_criterion = th.nn.MSELoss()
@@ -264,7 +265,8 @@ class OffpolicyActorCriticLearner(ActorCriticLearner):
             return super()._policy_loss(pi, advantages)
         else:
             # The loss for off-policy data
-            ratios = pi / self.pi_0.detach()
+            # ratios = pi / self.pi_0.detach()
+            ratios = pi / self.old_pi.detach()
             return -(advantages.detach() * ratios).mean()
 
 class PPOLearner(OffpolicyActorCriticLearner):
@@ -280,7 +282,8 @@ class PPOLearner(OffpolicyActorCriticLearner):
             return super()._policy_loss(pi, advantages)
         else:
             # The loss for off-policy data
-            ratios = pi / self.pi_0.detach()
+            # ratios = pi / self.pi_0.detach()
+            ratios = pi / self.old_pi.detach()
             loss = advantages.detach() * ratios
             if self.ppo_clipping:
                 # off-policy loss with PPO clipping
@@ -347,7 +350,7 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
             # th.linalg.norm(dist_gt, dim=-1)
             # k = (th.linalg.norm(dist_gt, dim=-1)<1).float()
 
-            D = th.sum(prod * k) / batch_size
+            D = -th.sum(prod * k) / batch_size
 
             self.w_optimizer.zero_grad()
             D.backward()

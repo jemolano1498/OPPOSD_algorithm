@@ -1,31 +1,17 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
+#%%
 # Pytorch and tools
 import torch as th
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
 from RunningEnv import EnvWrapper
 from Experiments import ActorCriticExperiment
 from Learners import ReinforceLearner
 from Learners import OffpolicyActorCriticLearner
 from Learners import PPOLearner
-
-
-# In[2]:
-
-
+#%%
 pref_pace = 181
 target_pace = pref_pace * 1.1
-
-
-# In[3]:
-
-
+#%%
 def default_params():
     """ These are the default parameters used int eh framework. """
     return {  # Debugging outputs and plotting during training
@@ -74,11 +60,7 @@ def default_params():
         'states_shape': (1,),  # Amount of states
         'num_actions': 5,  # Possible actions
     }
-
-
-# In[4]:
-
-
+#%%
 def test_in_environment(experiment, env):
     done = False
     env.reset()
@@ -92,7 +74,7 @@ def test_in_environment(experiment, env):
         score = 0
         time_step = 0
         while env.steps < 500:
-            action = experiment.controller.choose(np.array([2.5])).item()
+            action = experiment.controller.choose(state).detach().item()
             new_state, reward, done = env.step(action)
             score += reward
             state = new_state
@@ -109,13 +91,13 @@ def test_in_environment(experiment, env):
     state = env.step(0)[0]
 
     while env.steps < 500:
-        action = experiment.controller.choose(np.array([2.5])).item()
+        action = experiment.controller.choose(state).detach().item()
         new_state, reward, done = env.step(action)
         # if reward < 0:
         #     print(action, state, new_state, reward)
         # if (action != 5):
         # #     # print(action, (state+1)*pref_pace, (new_state+1)*pref_pace, reward)
-        #     print(action, state, new_state, reward)
+        # print(action, state, new_state, reward)
         state = new_state
 
     x = np.linspace(0, len(env.env_pacing), len(env.env_pacing))
@@ -136,20 +118,16 @@ def test_in_environment(experiment, env):
     plt.show()
 
     print(np.sum(env.rewards))
-
-
-# In[5]:
-
-
+#%%
 def plot_experiments(experiments, names):
-    sns.set()
     colors = ['b', 'g', 'r']
     plt.figure(figsize=(8, 6), dpi=80)
     i = 0
     for exp in experiments:
         # Smooth curves
         window = max(int(len(exp.episode_returns) / 50), 10)
-        if len(exp.episode_losses) < window + 2: return
+        print(window)
+        # if len(exp.episode_losses) < window + 2: return
         returns = np.convolve(exp.episode_returns, np.ones(window) / window, 'valid')
         # Determine x-axis based on samples or episodes
         x_returns = [i + window for i in range(len(returns))]
@@ -158,110 +136,37 @@ def plot_experiments(experiments, names):
         plt.ylabel('episode return')
         i+=1
     plt.legend()
-
-
-# In[6]:
-
-
+#%%
 params = default_params()
 params['plot_train_samples'] = False
 params['plot_frequency'] = 4
 params['batch_size'] = 1000
-params['max_batch_episodes'] = int(500)
+# params['epsilon_start'] = 0.5
+# params['epsilon_finish'] = 0
+params['max_batch_episodes'] = int(200)
+params['max_episode_length'] = int(2)
+# params['epsilon_finish'] = 0.05
+params['epsilon_anneal_time'] = 70000
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
 # The model has n_action policy heads and one value head
 model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
                          th.nn.Linear(128, 512), th.nn.ReLU(),
                          th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1))
+                         th.nn.Linear(128, n_actions + 1), th.nn.Softplus())
 experiment = ActorCriticExperiment(params, model, learner=ReinforceLearner(model, params=params))
 
-# Re-executing this code-block picks up the experiment where you left off
 try:
     experiment.run()
 except KeyboardInterrupt:
     experiment.close()
 experiment.plot_training()
 
+# plt.savefig('RL_algorithm.pdf')
 
-# In[7]:
-
-
-plot_experiments([experiment], ['Basic RL'])
-plt.savefig('RL')
-
-
-# In[15]:
-
-
-names = ['off-policy', 'off-policy PPO']
-experiments = []
-
-
-# In[16]:
-
-
-params = default_params()
-params['offpolicy_iterations'] = 128
-params['plot_train_samples'] = False
-params['plot_frequency'] = 4
-params['max_episodes'] = int(600)
-params['batch_size'] = 1000
-
-env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
-n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
-# The model has n_action policy heads and one value head
-model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, 512), th.nn.ReLU(),
-                         th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1))
-experiment = ActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
-
-# Re-executing this code-block picks up the experiment where you left off
-try:
-    experiment.run()
-except KeyboardInterrupt:
-    experiment.close()
-
-experiment.plot_training()
-test_in_environment(experiment, env)
-experiments = np.append(experiments, experiment)
-
-
-# In[17]:
-
-
-params = default_params()
-params['offpolicy_iterations'] = 128
-params['plot_train_samples'] = False
-params['plot_frequency'] = 4
-params['max_episodes'] = int(500)
-params['batch_size'] = 1000
-
-env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
-n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
-# The model has n_action policy heads and one value head
-model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, 512), th.nn.ReLU(),
-                         th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1))
-experiment = ActorCriticExperiment(params, model, learner=PPOLearner(model, params=params))
-
-# Re-executing this code-block picks up the experiment where you left off
-try:
-    experiment.run()
-except KeyboardInterrupt:
-    experiment.close()
-experiment.plot_training()
-
-test_in_environment(experiment, env)
-experiments = np.append(experiments, experiment)
-
-
-# In[18]:
-
-
-plot_experiments(experiments, names)
-plt.savefig('off policy')
-
+# for _ in range(10):
+#     env.reset()
+#     step = np.random.randint(0,5)
+#     env.step(step)
+#     step = np.random.randint(0,5)
+#     env.step(step)

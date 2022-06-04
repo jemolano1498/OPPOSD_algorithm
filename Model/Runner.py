@@ -15,7 +15,7 @@ class Runner:
         self.env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
         self.cont_actions = False
         self.controller = controller
-        self.epi_len = params.get('max_episode_length', 500)
+        self.epi_len = params.get('max_episode_length', 4)
         self.gamma = params.get('gamma', 0.99)
         self.use_pixels = params.get('pixel_observations', False)
 
@@ -77,6 +77,8 @@ class Runner:
         for t in range(max_steps):
             # One step in the envionment
             a = self.controller.choose(self.state)
+            for _ in range(10):
+                self.env.step(0)
             r, ns, d = self._run_step(a)
             terminal = d and self.time < self.epi_len - 1
             my_transition_buffer.add(self._wrap_transition(self.state, a, r, ns, terminal))

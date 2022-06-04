@@ -172,22 +172,22 @@ class ActorCriticExperiment(Experiment):
                 print('Steps limit reached')
                 break
 
-            interacted_episodes += batch_episodes
-            if interacted_episodes >= self.max_episodes:
-                print('Environment interaction limit reached')
-                break
+            # interacted_episodes += batch_episodes
+            # if interacted_episodes >= self.max_episodes:
+            #     print('Environment interaction limit reached')
+            #     break
 
             # Show intermediate results
-            # if self.print_dots:
-            #     print('.', end='')
-            # if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0 \
-            #         and len(self.episode_losses) > 2:
-            #     self.plot_training(update=True)
-            #     if self.print_when_plot:
-            #         print('Episode %u, 100-epi-return %.4g +- %.3g, length %u, loss %g' %
-            #               (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
-            #                np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
-            #                np.mean(self.episode_losses[-100:])))
+            if self.print_dots:
+                print('.', end='')
+            if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0 \
+                    and len(self.episode_losses) > 2:
+                self.plot_training(update=True)
+                if self.print_when_plot:
+                    print('Episode %u, 100-epi-return %.4g +- %.3g, length %u, loss %g' %
+                          (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
+                           np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
+                           np.mean(self.episode_losses[-100:])))
 
 class BatchActorCriticExperiment(Experiment):
     def __init__(self, params, model, learner=None, **kwargs):
