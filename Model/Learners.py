@@ -210,7 +210,31 @@ class BatchReinforceLearner:
 
         return actions_prob
 
-# class BiasedReinforceLearner(BatchReinforceLearner):
+class BatchBiasedReinforceLearner(BatchReinforceLearner):
+    def __init__(self, model, controller=None, params={}):
+        super().__init__(model=model, controller=controller, params=params)
+        self.value_criterion = th.nn.MSELoss()
+        self.advantage_bias = params.get('advantage_bias', True)
+        self.value_targets = params.get('value_targets', 'returns')
+        self.gamma = params.get('gamma')
+        self.compute_next_val = (self.value_targets == 'td')
+
+    def _advantages(self, batch, values=None, next_values=None):
+        """ Computes the advantages, Q-values or returns for the policy loss. """
+        advantages = batch['returns']
+        if self.advantage_bias:
+            advantages -= values
+        return advantages
+
+    def _value_loss(self, batch, values=None, next_values=None):
+        """ Computes the value loss (if there is one). """
+        targets = None
+        if self.value_targets == 'returns':
+            targets = batch['returns']
+        elif self.value_targets == 'td':
+            targets = batch['rewards'] + self.gamma * (~batch['dones'] * next_values)
+        return self.value_criterion(values, targets.detach())
+
 class BiasedReinforceLearner(ReinforceLearner):
     def __init__(self, model, controller=None, params={}):
         super().__init__(model=model, controller=controller, params=params)
@@ -253,6 +277,23 @@ class ActorCriticLearner(BiasedReinforceLearner):
             advantages = advantages - values
         return advantages
 
+class BatchActorCriticLearner(BatchBiasedReinforceLearner):
+    def __init__(self, model, controller=None, params={}):
+        super().__init__(model=model, controller=controller, params=params)
+        self.advantage_bootstrap = params.get('advantage_bootstrap', True)
+        self.compute_next_val = self.compute_next_val or self.advantage_bootstrap
+
+    def _advantages(self, batch, values=None, next_values=None):
+        """ Computes the advantages, Q-values or returns for the policy loss. """
+        advantages = None
+        if self.advantage_bootstrap:
+            advantages = batch['rewards']+ self.gamma * (~batch['dones']* next_values)
+        else:
+            advantages = batch['returns']
+        if self.advantage_bias:
+            advantages = advantages - values
+        return advantages
+
 class OffpolicyActorCriticLearner(ActorCriticLearner):
     def __init__(self, model, controller=None, params={}):
         super().__init__(model=model, controller=controller, params=params)
@@ -269,7 +310,45 @@ class OffpolicyActorCriticLearner(ActorCriticLearner):
             ratios = pi / self.old_pi.detach()
             return -(advantages.detach() * ratios).mean()
 
+class BatchOffpolicyActorCriticLearner(BatchActorCriticLearner):
+    def __init__(self, model, controller=None, params={}):
+        super().__init__(model=model, controller=controller, params=params)
+
+    def _policy_loss(self, pi, advantages):
+        """ Computes the policy loss. """
+        if self.old_pi is None:
+            self.old_pi = pi  # remember on-policy probabilities for off-policy losses
+            # Return the defaul on-policy loss
+            return super()._policy_loss(pi, advantages)
+        else:
+            # The loss for off-policy data
+            # ratios = pi / self.pi_0.detach()
+            ratios = pi / self.old_pi.detach()
+            return -(advantages.detach() * ratios).mean()
+
 class PPOLearner(OffpolicyActorCriticLearner):
+    def __init__(self, model, controller=None, params={}):
+        super().__init__(model=model, controller=controller, params=params)
+        self.ppo_clipping = params.get('ppo_clipping', False)
+        self.ppo_clip_eps = params.get('ppo_clip_eps', 0.2)
+
+    def _policy_loss(self, pi, advantages):
+        """ Computes the policy loss. """
+        if self.old_pi is None:
+            # The loss for on-policy data does not change
+            return super()._policy_loss(pi, advantages)
+        else:
+            # The loss for off-policy data
+            # ratios = pi / self.pi_0.detach()
+            ratios = pi / self.old_pi.detach()
+            loss = advantages.detach() * ratios
+            if self.ppo_clipping:
+                # off-policy loss with PPO clipping
+                ppo_loss = th.clamp(ratios, 1 - self.ppo_clip_eps, 1 + self.ppo_clip_eps) * advantages.detach()
+                loss = th.min(loss, ppo_loss)
+            return -loss.mean()
+
+class BatchPPOLearner(BatchOffpolicyActorCriticLearner):
     def __init__(self, model, controller=None, params={}):
         super().__init__(model=model, controller=controller, params=params)
         self.ppo_clipping = params.get('ppo_clipping', False)

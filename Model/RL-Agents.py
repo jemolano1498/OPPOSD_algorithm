@@ -1,11 +1,13 @@
 #%%
 # Pytorch and tools
+import pickle
+
 import torch as th
 import numpy as np
 import matplotlib.pyplot as plt
 from RunningEnv import EnvWrapper
-from Experiments import ActorCriticExperiment
-from Learners import ReinforceLearner
+from Experiments import ActorCriticExperiment, BatchActorCriticExperiment
+from Learners import ReinforceLearner, BatchReinforceLearner
 from Learners import OffpolicyActorCriticLearner
 from Learners import PPOLearner
 #%%
@@ -137,14 +139,40 @@ def plot_experiments(experiments, names):
         i+=1
     plt.legend()
 #%%
+# params = default_params()
+# params['plot_train_samples'] = False
+# params['plot_frequency'] = 4
+# params['batch_size'] = 1e5
+# params['offpolicy_iterations'] = 128
+# # params['epsilon_start'] = 0.5
+# # params['epsilon_finish'] = 0
+# params['max_batch_episodes'] = int(200)
+# params['mini_batch_size'] = int(200)
+# # params['max_episode_length'] = int(3)
+# # params['epsilon_finish'] = 0.05
+# params['epsilon_anneal_time'] = 70000
+# env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+# n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+# # The model has n_action policy heads and one value head
+# model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, 512), th.nn.ReLU(),
+#                          th.nn.Linear(512, 128), th.nn.ReLU(),
+#                          th.nn.Linear(128, n_actions + 1))
+# experiment = BatchActorCriticExperiment(params, model, learner=BatchReinforceLearner(model, params=params))
+# # batch = experiment.get_transition_batch()
+#
+# dbfile = open('random_simulator_batch_pickle', 'rb')
+# batch = pickle.load(dbfile)
+# dbfile.close()
 params = default_params()
 params['plot_train_samples'] = False
 params['plot_frequency'] = 4
 params['batch_size'] = 1000
+params['offpolicy_iterations'] = 128
 # params['epsilon_start'] = 0.5
 # params['epsilon_finish'] = 0
 params['max_batch_episodes'] = int(200)
-params['max_episode_length'] = int(2)
+params['max_episode_length'] = int(3)
 # params['epsilon_finish'] = 0.05
 params['epsilon_anneal_time'] = 70000
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
@@ -153,10 +181,11 @@ n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
 model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
                          th.nn.Linear(128, 512), th.nn.ReLU(),
                          th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1), th.nn.Softplus())
-experiment = ActorCriticExperiment(params, model, learner=ReinforceLearner(model, params=params))
+                         th.nn.Linear(128, n_actions + 1))
+experiment = ActorCriticExperiment(params, model, learner=PPOLearner(model, params=params))
 
 try:
+    # experiment.run(batch['buffer'])
     experiment.run()
 except KeyboardInterrupt:
     experiment.close()

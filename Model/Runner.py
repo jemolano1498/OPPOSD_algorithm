@@ -77,8 +77,6 @@ class Runner:
         for t in range(max_steps):
             # One step in the envionment
             a = self.controller.choose(self.state)
-            for _ in range(10):
-                self.env.step(0)
             r, ns, d = self._run_step(a)
             terminal = d and self.time < self.epi_len - 1
             my_transition_buffer.add(self._wrap_transition(self.state, a, r, ns, terminal))
