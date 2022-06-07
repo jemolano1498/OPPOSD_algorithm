@@ -441,17 +441,17 @@ class BatchReinforceLearner:
         self.model_critic = model[1]
         self.model_w = model[2]
 
-        self.gamma = params.get('gamma')
-
         self.controller = controller
         self.value_loss_param = params.get('value_loss_param', 1)
         self.offpolicy_iterations = params.get('offpolicy_iterations', 10)
 
-        self.all_parameters_actor = list(model_actor.parameters())
+        self.all_parameters_actor = list(self.model_actor.parameters())
         self.optimizer_actor = th.optim.Adam(self.all_parameters_actor, lr=params.get('lr', 1E-3))
 
-        self.all_parameters_critic = list(model_critic.parameters())
-        self.optimizer_critic = th.optim.Adam(self.all_parameters_actor, lr=params.get('lr', 1E-3))
+        self.all_parameters_critic = list(self.model_critic.parameters())
+        self.optimizer_critic = th.optim.Adam(self.all_parameters_critic, lr=params.get('lr', 1E-3))
+
+        self.gamma = params.get('gamma')
 
         self.grad_norm_clip = params.get('grad_norm_clip', 10)
         self.compute_next_val = False  # whether the next state's value is computed
@@ -485,8 +485,38 @@ class BatchReinforceLearner:
         # model = [model_actor, model_critic, model_w]
         loss_sum = 0.0
         for _ in range(1 + self.offpolicy_iterations):
-
-
+# HERE START
+#             if self.opposd:
+#                 for _ in range(50):
+#                     pass
+#
+#             batch_ac = batch.sample(int(5e3))
+#
+#             out = self.model_actor(batch_ac['states'])  # compute both policy and values
+#             val = out[:, -1].unsqueeze(dim=-1)  # last entry are the values
+#             next_val = self.model_actor(batch_ac['next_states'])[:, -1].unsqueeze(
+#                 dim=-1) if self.compute_next_val else None
+#             pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1,
+#                                                                                      index=batch_ac['actions'])
+#
+#             self.pi_0 = self.old_pi + 0 * batch_ac['returns']
+#             # if self.heuristic:
+#             #     self.pi_0 = self.get_probabilities(batch_ac['states']).gather(dim=-1, index=batch_ac['actions']).detach()
+#             if self.opposd:
+#                 pass
+#
+#
+#             # Combine policy and value loss
+#             loss = self._policy_loss(pi, self._advantages(batch_ac, val, next_val)) \
+#                    + self.value_loss_param * self._value_loss(batch_ac, val, next_val)
+#             # Backpropagate loss
+#             self.optimizer_actor.zero_grad()
+#             loss.backward()
+#             grad_norm = th.nn.utils.clip_grad_norm_(self.all_parameters_actor, self.grad_norm_clip)
+#             self.optimizer_actor.step()
+#             loss_sum += loss.item()
+# HERE END
+# HERE START
             if self.opposd:
                 for _ in range(50):
                     # batch_w = self.runner.run(self.batch_size, transition_buffer)
@@ -496,52 +526,119 @@ class BatchReinforceLearner:
                     pi = th.nn.functional.softmax(self.model_actor(batch_w['states']), dim=-1).gather(dim=-1, index=batch_w['actions'])
                     self.update_policy_distribution(batch_w, pi.detach()/self.pi_0)
 
-            # Critic updates
             for _ in range(10):
-                # batch_w = self.runner.run(self.batch_size, transition_buffer)
-                self.model_critic.train(True)
-                batch_c = batch.sample(5000)
-                self.pi_0 = self.old_pi + 0 * batch_c['returns']
-                # Compute the model-output for given batch
-                pi = th.nn.functional.softmax(self.model_actor(batch_c['states']), dim=-1).gather(dim=-1, index=batch_c['actions'])
+                batch_c = batch.sample(int(5e3))
+
                 val = self.model_critic(batch_c['states'])
-                # next_val = self.model_critic(batch_c['next_states'])
-                # self._value_loss(batch_c, val, next_val)
-                # loss_critic = th.mean(pi.detach()/self.pi_0 * (self._advantages(batch_c, val, next_val))**2)
-                # targets = batch_c['rewards'] + self.gamma * (~batch_c['dones'] * next_val)
-                targets = batch_c['rewards']
-                loss_critic = th.nn.MSELoss(val, targets.detach())
+                next_val = self.model_critic(batch_c['next_states'])
+                pi = th.nn.functional.softmax(self.model_actor(batch_c['states']), dim=-1).gather(dim=-1, index=batch_c['actions'])
+                pi.detach()
+                self.pi_0 = self.old_pi + 0 * batch_c['returns']
+
+                # value_loss = self._value_loss(batch_c, val, next_val)
+
+                targets = batch_c['returns']
+
+                # loss_fn = th.nn.MSELoss()
+                # value_loss = loss_fn(val, targets)
+
+                value_loss = th.mean((pi/self.pi_0) * (targets - val)**2)
+
                 self.optimizer_critic.zero_grad()
-                loss_critic.backward()
+                value_loss.backward()
                 th.nn.utils.clip_grad_norm_(self.all_parameters_critic, self.grad_norm_clip)
                 self.optimizer_critic.step()
 
-            self.model_actor.train(True)
             batch_a = batch.sample(int(5e3))
 
-            pi = th.nn.functional.softmax(self.model_actor(batch_a['states']), dim=-1).gather(dim=-1,index=batch_a['actions'])
+            pi = th.nn.functional.softmax(self.model_actor(batch_a['states']), dim=-1).gather(dim=-1, index=batch_a['actions'])
 
-            val = self.model_critic(batch_a['states']).detach()
-            next_val = self.model_critic(batch_a['next_states']).detach()
-
+            val = self.model_critic(batch_a['states'])
+            next_val = self.model_critic(batch_a['next_states'])
             self.pi_0 = self.old_pi + 0 * batch_a['returns']
 
-            # ratio = pi.clone().detach()/self.pi_0
-            ratio = pi/self.pi_0
+            Q = self._advantages(batch_a, val, next_val)
+            ratios = pi / self.pi_0.detach()
             if self.opposd:
                 w = self.model_w(batch_a['states']).detach()
                 w /= th.mean(w)
-                ratio = w * ratio
+                ratios = w * ratios
+            policy_loss = -(Q.detach() * ratios).mean()
 
-            # loss_actor = -(ratio * batch_a['returns']).mean()
-            loss_actor = -(ratio * self._advantages(batch_a, val, next_val).detach()).mean()
-            # loss = self._policy_loss(pi, self._advantages(batch_a, val, next_val))
-            # Backpropagate loss
             self.optimizer_actor.zero_grad()
-            loss_actor.backward()
+            policy_loss.backward()
             th.nn.utils.clip_grad_norm_(self.all_parameters_actor, self.grad_norm_clip)
             self.optimizer_actor.step()
-            loss_sum += loss_actor.item()
+
+            # Combine policy and value loss
+            loss = policy_loss.detach().item()
+
+            loss_sum += loss
+# HERE END
+# HERE START
+#             if self.opposd:
+#                 for _ in range(50):
+#                     # batch_w = self.runner.run(self.batch_size, transition_buffer)
+#                     batch_w = batch.sample(200)
+#                     self.pi_0 = self.old_pi + 0 * batch_w['returns']
+#                     # Compute the model-output for given batch
+#                     pi = th.nn.functional.softmax(self.model_actor(batch_w['states']), dim=-1).gather(dim=-1, index=batch_w['actions'])
+#                     self.update_policy_distribution(batch_w, pi.detach()/self.pi_0)
+#
+#             # Critic updates
+#             for _ in range(10):
+#                 # batch_w = self.runner.run(self.batch_size, transition_buffer)
+#                 self.model_critic.train(True)
+#                 batch_c = batch.sample(5000)
+#                 self.pi_0 = self.old_pi + 0 * batch_c['returns']
+#                 # Compute the model-output for given batch
+#                 # pi = th.nn.functional.softmax(self.model_actor(batch_c['states']), dim=-1).gather(dim=-1, index=batch_c['actions'])
+#                 val = self.model_critic(batch_c['states'])
+#                 next_val = self.model_critic(batch_c['next_states'])
+#                 # Q = (batch_c['rewards'] + self.gamma * (~batch_c['dones'] * next_val))
+#                 # Q = (batch_c['returns'] + self.gamma * (next_val))
+#                 # loss_fn = th.nn.MSELoss()
+#                 # loss_critic = loss_fn(val, Q.detach())
+#                 loss_critic = self._value_loss(batch_c, val, next_val)
+#                 # loss_critic = th.mean(pi/self.pi_0 * (Q-val)**2)
+#                 self.optimizer_critic.zero_grad()
+#                 loss_critic.backward()
+#                 th.nn.utils.clip_grad_norm_(self.all_parameters_critic, self.grad_norm_clip)
+#                 self.optimizer_critic.step()
+#
+#             self.model_actor.train(True)
+#             batch_a = batch.sample(int(5e3))
+#
+#             pi = th.nn.functional.softmax(self.model_actor(batch_a['states']), dim=-1).gather(dim=-1,index=batch_a['actions'])
+#
+#             val = self.model_critic(batch_a['states'])
+#             next_val = self.model_critic(batch_a['next_states'])
+#             # advantages = batch_a['rewards'] + self.gamma * (~batch_a['dones'] * next_val)
+#             # advantages = advantages - val
+#
+#             self.pi_0 = self.old_pi + 0 * batch_a['returns']
+#
+#             # ratio = pi/self.pi_0
+#             # ratio = pi.clone().detach()/self.pi_0
+#             if self.opposd:
+#                 w = self.model_w(batch_a['states']).detach()
+#                 w /= th.mean(w)
+#                 ratio = w * ratio
+#                 pi = w * pi * pi.log()
+#
+#             # Q = (batch_a['rewards'] + self.gamma * (~batch_a['dones'] * next_val))
+#             # loss_actor = -(ratio * pi.log() * Q).mean()
+#             # loss_actor = -(pi.log() * Q.detach()).sum()
+#             # loss_actor = -(advantages.detach() * pi.log()).mean()
+#             loss_actor = self._policy_loss(pi, self._advantages(batch_a, val, next_val))
+#             # loss = self._policy_loss(pi, self._advantages(batch_a, val, next_val))
+#             # Backpropagate loss
+#             self.optimizer_actor.zero_grad()
+#             loss_actor.backward()
+#             th.nn.utils.clip_grad_norm_(self.all_parameters_actor, self.grad_norm_clip)
+#             self.optimizer_actor.step()
+#             loss_sum += loss_actor.item()
+# HERE END
         return loss_sum
 #%%
 class Experiment:
@@ -782,30 +879,57 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
             self.optimizer_w.step()
 #%%
 experiments = []
-#%%
-params = default_params()
-env = gym.make(params['env'])
-n_actions, state_dim = env.action_space.n, env.observation_space.shape[0]
-params['states_shape'] = state_dim
-params['num_actions'] = n_actions
-params['batch_size'] = int(1e5)
-params['mini_batch_size'] = 200
 
-# The model has n_action policy heads and one value head
-model_actor = th.nn.Sequential(th.nn.Linear(state_dim, 32), th.nn.ReLU(),
-                         th.nn.Linear(32, n_actions))
-model_critic = th.nn.Sequential(th.nn.Linear(state_dim, 32), th.nn.ReLU(),
-                         th.nn.Linear(32, 1))
-model_w = th.nn.Sequential(th.nn.Linear(state_dim, 32), th.nn.ReLU(),
-                         th.nn.Linear(32, 1), th.nn.Softplus())
-model = [model_actor, model_critic, model_w]
-# experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
-# experiments_batch = experiment.get_transition_batch()
+#%%
 
 dbfile = open('cartpolePickle', 'rb')
 experiments_batch = pickle.load(dbfile)
 dbfile.close()
 heuristic = True
+
+return_dict = {}
+params = default_params()
+params['offpolicy_iterations'] = 10
+params['plot_train_samples'] = False
+params['plot_frequency'] = 4
+params['max_batch_episodes'] = int(50)
+params['batch_size'] = int(1e5)
+params['mini_batch_size'] = 1000
+params['opposd'] = True
+params['opposd_iterations'] = 50
+env = gym.make(params['env'])
+n_actions, state_dim = env.action_space.n, env.observation_space.shape[0]
+params['states_shape'] = state_dim
+params['num_actions'] = n_actions
+
+# The model has n_action policy heads and one value head
+model_actor = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 512), th.nn.ReLU(),
+                         th.nn.Linear(512, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, n_actions))
+model_critic = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 512), th.nn.ReLU(),
+                         th.nn.Linear(512, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1))
+# model_w = th.nn.Sequential(th.nn.Linear(state_dim, 32), th.nn.ReLU(),
+#                          th.nn.Linear(32, 1), th.nn.Softplus())
+model_w = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 512), th.nn.ReLU(),
+                         th.nn.Linear(512, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1), th.nn.Softplus())
+model = [model_actor, model_critic, model_w]
+experiment = BatchActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
+try:
+    experiment.run(experiments_batch)
+except KeyboardInterrupt:
+    experiment.close()
+experiment.plot_training()
+
+return_dict.update({'model' : 'OFFPAC',
+                            'experiment': experiment})
+experiments = np.append(experiments, return_dict)
+
+
 #%%
 
 #%%
@@ -836,29 +960,29 @@ heuristic = True
 # experiments = np.append(experiments, return_dict)
 
 
-return_dict = {}
-params = default_params()
-params['offpolicy_iterations'] = 10
-params['plot_train_samples'] = False
-params['plot_frequency'] = 4
-params['max_batch_episodes'] = int(200)
-params['batch_size'] = int(1e5)
-params['mini_batch_size'] = 200
-params['opposd'] = False
-params['opposd_iterations'] = 50
-env = gym.make(params['env'])
-n_actions, state_dim = env.action_space.n, env.observation_space.shape[0]
-params['states_shape'] = state_dim
-params['num_actions'] = n_actions
-
-# The model has n_action policy heads and one value head
-experiment = BatchActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
-try:
-    experiment.run(experiments_batch)
-except KeyboardInterrupt:
-    experiment.close()
-experiment.plot_training()
-
-return_dict.update({'model' : 'OFFPAC',
-                            'experiment': experiment})
-experiments = np.append(experiments, return_dict)
+# return_dict = {}
+# params = default_params()
+# params['offpolicy_iterations'] = 10
+# params['plot_train_samples'] = False
+# params['plot_frequency'] = 4
+# params['max_batch_episodes'] = int(200)
+# params['batch_size'] = int(1e5)
+# params['mini_batch_size'] = 200
+# params['opposd'] = False
+# params['opposd_iterations'] = 50
+# env = gym.make(params['env'])
+# n_actions, state_dim = env.action_space.n, env.observation_space.shape[0]
+# params['states_shape'] = state_dim
+# params['num_actions'] = n_actions
+#
+# # The model has n_action policy heads and one value head
+# experiment = BatchActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
+# try:
+#     experiment.run(experiments_batch)
+# except KeyboardInterrupt:
+#     experiment.close()
+# experiment.plot_training()
+#
+# return_dict.update({'model' : 'OFFPAC',
+#                             'experiment': experiment})
+# experiments = np.append(experiments, return_dict)

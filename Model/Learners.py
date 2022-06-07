@@ -104,23 +104,30 @@ class ReinforceLearner:
 
 class BatchReinforceLearner:
     """ A learner that performs a version of REINFORCE. """
-
     def __init__(self, model, controller=None, params={}):
         self.learner = None
-        self.model = model
+        self.model_actor = model[0]
+        self.model_critic = model[1]
+        self.model_w = model[2]
+
         self.controller = controller
         self.value_loss_param = params.get('value_loss_param', 1)
         self.offpolicy_iterations = params.get('offpolicy_iterations', 10)
-        self.all_parameters = list(model.parameters())
-        self.optimizer = th.optim.Adam(self.all_parameters, lr=params.get('lr', 5E-4))
+
+        self.all_parameters_actor = list(self.model_actor.parameters())
+        self.optimizer_actor = th.optim.Adam(self.all_parameters_actor, lr=params.get('lr', 1E-3))
+
+        self.all_parameters_critic = list(self.model_critic.parameters())
+        self.optimizer_critic = th.optim.Adam(self.all_parameters_critic, lr=params.get('lr', 1E-3))
+
+        self.gamma = params.get('gamma')
+
         self.grad_norm_clip = params.get('grad_norm_clip', 10)
         self.compute_next_val = False  # whether the next state's value is computed
         self.opposd = params.get('opposd', False)
-        # self.heuristic = params.get('heuristic', False)
         self.num_actions = params.get('num_actions', 5)
         self.old_pi = th.ones(1, 1) / self.num_actions
         self.pi_0 = None
-        self.w_model = None
 
     def set_controller(self, controller):
         """ This function is called in the experiment to set the controller. """
@@ -143,50 +150,68 @@ class BatchReinforceLearner:
 
     def train(self, batch):
         assert self.controller is not None, "Before train() is called, a controller must be specified. "
-        self.model.train(True)
+
+        # model = [model_actor, model_critic, model_w]
         loss_sum = 0.0
         for _ in range(1 + self.offpolicy_iterations):
-
+# HERE START
             if self.opposd:
                 for _ in range(50):
                     # batch_w = self.runner.run(self.batch_size, transition_buffer)
                     batch_w = batch.sample(200)
                     self.pi_0 = self.old_pi + 0 * batch_w['returns']
-                    # if self.heuristic:
-                    #     self.pi_0 = self.get_probabilities(batch_w['states']).gather(dim=-1, index=batch_w['actions']).detach()
                     # Compute the model-output for given batch
-                    out = self.model(batch_w['states'])  # compute both policy and values
-                    pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1,
-                                                                                             index=batch_w['actions'])
+                    pi = th.nn.functional.softmax(self.model_actor(batch_w['states']), dim=-1).gather(dim=-1, index=batch_w['actions'])
                     self.update_policy_distribution(batch_w, pi.detach()/self.pi_0)
 
-            batch_ac = batch.sample(int(5e3))
+            for _ in range(10):
+                batch_c = batch.sample(int(5e3))
 
-            out = self.model(batch_ac['states'])  # compute both policy and values
-            val = out[:, -1].unsqueeze(dim=-1)  # last entry are the values
-            next_val = self.model(batch_ac['next_states'])[:, -1].unsqueeze(
-                dim=-1) if self.compute_next_val else None
-            pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1,
-                                                                                     index=batch_ac['actions'])
+                val = self.model_critic(batch_c['states'])
+                next_val = self.model_critic(batch_c['next_states'])
+                pi = th.nn.functional.softmax(self.model_actor(batch_c['states']), dim=-1).gather(dim=-1, index=batch_c['actions'])
+                pi.detach()
+                self.pi_0 = self.old_pi + 0 * batch_c['returns']
 
-            self.pi_0 = self.old_pi + 0 * batch_ac['returns']
-            # if self.heuristic:
-            #     self.pi_0 = self.get_probabilities(batch_ac['states']).gather(dim=-1, index=batch_ac['actions']).detach()
+                # value_loss = self._value_loss(batch_c, val, next_val)
+
+                targets = batch_c['returns']
+
+                # loss_fn = th.nn.MSELoss()
+                # value_loss = loss_fn(val, targets)
+
+                value_loss = th.mean((pi/self.pi_0) * (targets - val)**2)
+
+                self.optimizer_critic.zero_grad()
+                value_loss.backward()
+                th.nn.utils.clip_grad_norm_(self.all_parameters_critic, self.grad_norm_clip)
+                self.optimizer_critic.step()
+
+            batch_a = batch.sample(int(5e3))
+
+            pi = th.nn.functional.softmax(self.model_actor(batch_a['states']), dim=-1).gather(dim=-1, index=batch_a['actions'])
+
+            val = self.model_critic(batch_a['states'])
+            next_val = self.model_critic(batch_a['next_states'])
+            self.pi_0 = self.old_pi + 0 * batch_a['returns']
+
+            Q = self._advantages(batch_a, val, next_val)
+            ratios = pi / self.pi_0.detach()
             if self.opposd:
-                w = self.w_model(batch_ac['states']).detach()
+                w = self.model_w(batch_a['states']).detach()
                 w /= th.mean(w)
+                ratios = w * ratios
+            policy_loss = -(Q.detach() * ratios).mean()
 
-                pi = w * pi.detach()/self.pi_0 * pi.log()
+            self.optimizer_actor.zero_grad()
+            policy_loss.backward()
+            th.nn.utils.clip_grad_norm_(self.all_parameters_actor, self.grad_norm_clip)
+            self.optimizer_actor.step()
 
             # Combine policy and value loss
-            loss = self._policy_loss(pi, self._advantages(batch_ac, val, next_val)) \
-                   + self.value_loss_param * self._value_loss(batch_ac, val, next_val)
-            # Backpropagate loss
-            self.optimizer.zero_grad()
-            loss.backward()
-            grad_norm = th.nn.utils.clip_grad_norm_(self.all_parameters, self.grad_norm_clip)
-            self.optimizer.step()
-            loss_sum += loss.item()
+            loss = policy_loss.detach().item()
+
+            loss_sum += loss
         return loss_sum
 
     def get_probabilities(self, state):
