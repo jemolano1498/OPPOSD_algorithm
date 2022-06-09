@@ -55,11 +55,13 @@ class ReinforceLearner:
     """ A learner that performs a version of REINFORCE. """
 
     def __init__(self, model, controller=None, params={}):
-        self.model = model
+        self.model_actor = model[0]
+        self.model_critic = model[1]
+        self.model_w = model[2]
         self.controller = controller
         self.value_loss_param = params.get('value_loss_param', 1)
         self.offpolicy_iterations = params.get('offpolicy_iterations', 0)
-        self.all_parameters = list(model.parameters())
+        self.all_parameters = list(self.model_actor.parameters())
         self.optimizer = th.optim.Adam(self.all_parameters, lr=params.get('lr', 5E-4))
         self.grad_norm_clip = params.get('grad_norm_clip', 10)
         self.compute_next_val = False  # whether the next state's value is computed
@@ -83,13 +85,13 @@ class ReinforceLearner:
 
     def train(self, batch):
         assert self.controller is not None, "Before train() is called, a controller must be specified. "
-        self.model.train(True)
+        self.model_actor.train(True)
         self.old_pi, loss_sum = None, 0.0
         for _ in range(1 + self.offpolicy_iterations):
             # Compute the model-output for given batch
-            out = self.model(batch['states'])  # compute both policy and values
+            out = self.model_actor(batch['states'])  # compute both policy and values
             val = out[:, -1].unsqueeze(dim=-1)  # last entry are the values
-            next_val = self.model(batch['next_states'])[:, -1].unsqueeze(dim=-1) if self.compute_next_val else None
+            next_val = self.model_actor(batch['next_states'])[:, -1].unsqueeze(dim=-1) if self.compute_next_val else None
             pi = self.controller.probabilities(out[:, :-1], precomputed=True).gather(dim=-1, index=batch['actions'])
             # Combine policy and value loss
             loss = self._policy_loss(pi, self._advantages(batch, val, next_val)) \
@@ -395,19 +397,15 @@ class BatchPPOLearner(BatchOffpolicyActorCriticLearner):
                 loss = th.min(loss, ppo_loss)
             return -loss.mean()
 
-class OPPOSDLearner(OffpolicyActorCriticLearner):
+class OPPOSDLearner(BatchOffpolicyActorCriticLearner):
     def __init__(self, model, controller=None, params={}):
         super().__init__(model=model, controller=controller, params=params)
         self.num_actions = params.get('num_actions', 5)
         self.batch_size = params.get('batch_size')
         self.states_shape = params.get('states_shape')
         self.w_grad_norm_clip = params.get('grad_norm_clip', 10)
-        self.w_model = th.nn.Sequential(th.nn.Linear(self.states_shape[0], 128), th.nn.ReLU(),
-                                        th.nn.Linear(128, 512), th.nn.ReLU(),
-                                        th.nn.Linear(512, 128), th.nn.ReLU(),
-                                        th.nn.Linear(128, 1))
-        self.w_parameters = list(self.w_model.parameters())
-        self.w_optimizer = th.optim.Adam(self.w_parameters, lr=params.get('lr', 5E-4))
+        self.parameters_w = list(self.model_w.parameters())
+        self.optimizer_w = th.optim.Adam(self.parameters_w, lr=1E-3)
 
     def _policy_loss(self, pi, advantages):
         # The loss for off-policy data
@@ -424,13 +422,13 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
         # self.w_optimizer = th.optim.Adam(self.w_parameters, lr=params.get('lr', 5E-4))
 
     def update_policy_distribution(self, batch, ratios):
-        self.w_model.train(True)
+        self.model_w.train(True)
         batch_size = batch.size
 
         next_states = batch['next_states']
         with th.autograd.set_detect_anomaly(True):
-            w = self.w_model(batch['states'])
-            w_ = self.w_model(batch['next_states'])
+            w = self.model_w(batch['states'])
+            w_ = self.model_w(batch['next_states'])
 
             w = w / th.mean(w)
             w_ = w_ / th.mean(w_)
@@ -439,9 +437,9 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
 
             k = th.zeros(batch_size, batch_size, self.states_shape[0])
             for i in range(self.states_shape[0]):
-                k[:, :, i] = (next_states[:, i].view(1, -1) - next_states[:, i].view(-1, 1))**2
+                k[:, :, i] = next_states[:, i].view(1, -1) - next_states[:, i].view(-1, 1)
 
-            k = th.exp(-k/2)
+            k = th.exp(-th.linalg.norm(k, dim=-1)/2)
             prod = th.matmul(d, d.transpose(0, 1))
 
             # n_lm = 3
@@ -454,10 +452,11 @@ class OPPOSDLearner(OffpolicyActorCriticLearner):
             # th.linalg.norm(dist_gt, dim=-1)
             # k = (th.linalg.norm(dist_gt, dim=-1)<1).float()
 
-            D = -th.sum(prod * k) / batch_size
+            D = th.sum(prod * k) / batch_size
 
-            self.w_optimizer.zero_grad()
+            self.optimizer_w.zero_grad()
             D.backward()
-            self.w_optimizer.step()
+            th.nn.utils.clip_grad_norm_(self.parameters_w, self.w_grad_norm_clip)
+            self.optimizer_w.step()
 
 

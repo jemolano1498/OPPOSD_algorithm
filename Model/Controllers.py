@@ -8,7 +8,10 @@ class QController:
     def __init__(self, model, num_actions=None, params={}):
         self.lock = threading.Lock()
         self.num_actions = model[-1].out_features if num_actions is None else num_actions
-        self.model = model
+
+        self.model =model
+        self.model_actor = model[0]
+        self.model_critic = model[1]
 
     def copy(self):
         """ Shallow copy of this controller that does not copy the model. """
@@ -16,7 +19,8 @@ class QController:
 
     def parameters(self):
         """ Returns a generator of the underlying model parameters. """
-        return self.model.parameters()
+
+        return self.model[0].parameters(), self.model[1].parameters(), self.model[2].parameters()
 
     def sanitize_inputs(self, observation, **kwargs):
         """ Casts numpy arrays as Tensors. """
@@ -28,7 +32,7 @@ class QController:
         """ Returns the greedy actions the agent would choose when facing an "observation". """
         self.lock.acquire()
         try:
-            mx = self.model(self.sanitize_inputs(observation))
+            mx = self.model[0](self.sanitize_inputs(observation))
             if mx.shape[-1] > self.num_actions: mx = mx[:, :self.num_actions]
         finally:
             self.lock.release()
@@ -38,12 +42,11 @@ class QController:
         """ Returns the probabilities with which the agent would choose actions (here one-hot because greedy). """
         self.lock.acquire()
         try:
-            mx = self.model(self.sanitize_inputs(observation))
+            mx = self.model[0](self.sanitize_inputs(observation))
             if mx.shape[-1] > self.num_actions: mx = mx[:, :self.num_actions]
         finally:
             self.lock.release()
         return th.zeros(*mx.shape).scatter_(dim=-1, index=th.max(mx, dim=-1)[1].unsqueeze(dim=-1), src=th.ones(1, 1))
-
 class EpsilonGreedyController:
     """ A wrapper that makes any controller into an epsilon-greedy controller.
         Keeps track of training-steps to decay exploration automatically. """
@@ -83,7 +86,7 @@ class ACController(QController):
     def probabilities(self, observation, precomputed=False, **kwargs):
         self.lock.acquire()
         try:
-            mx = observation if precomputed else self.model(self.sanitize_inputs(observation))[:, :self.num_actions]
+            mx = observation if precomputed else self.model[0](self.sanitize_inputs(observation))[:, :self.num_actions]
         finally:
             self.lock.release()
         return th.nn.functional.softmax(mx, dim=-1)

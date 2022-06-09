@@ -116,6 +116,111 @@ class Runner:
             Returns a dictionary containing the transition_buffer and episode statstics. """
         return self.run(0, transition_buffer, trim, return_dict)
 
+    def fill_transition_buffer(self, experiments_transition_buffer, datapath):
+        time, episode_start, episode_lengths, episode_rewards = 0, 0, [], []
+        max_steps = 5000
+
+        data_folder_path = datapath
+        exp_batch = [16, 10]
+        tests = [['PNPpref', 'PNPfast'], ['CP103', 'IP103', 'CP110', 'IP110']]
+        t = 0
+        for _ in range(3):
+
+            for exp in range(len(exp_batch)):
+                for participant in range(1, exp_batch[exp]):
+                    participant_number = str(participant)
+                    for i in range(len(tests[exp])):
+                        calculated_values = pd.read_csv(
+                            data_folder_path + ('calculated_variables/%s_R_%s_calculated.csv') % (
+                                tests[exp][i], participant_number))
+
+                        target_pace = calculated_values[calculated_values['pacing_frequency'].notna()][
+                            'pacing_frequency'].mean()
+                        calculated_values_norm = calculated_values.copy()
+                        calculated_values_norm['norm_step_frequency'] = calculated_values_norm[
+                                                                            'step_frequency'] / target_pace
+
+                        env = RunningEnv(target_pace)
+                        wrapper = EnvWrapper(target_pace, target_pace)
+                        state_func = EwmaBiasState()
+                        timestep = 0
+                        prev_states = []
+                        action = 0
+                        reward = 0
+                        n_state = 0
+                        finish_leap = False
+                        skip_steps = 0
+                        total_reward = 0
+
+                        for row in calculated_values_norm.to_numpy():
+                            avg_pace = state_func.get_next_state(row[2])
+                            n_state = (avg_pace / target_pace) - 1
+                            if skip_steps > 0:
+                                prev_states = np.append(prev_states, n_state)
+                                if skip_steps == 1:
+                                    finish_leap = True
+                                skip_steps -= 1
+                                timestep += 1
+                                continue
+                            else:
+
+                                if timestep == 0:
+                                    prev_states = np.append(prev_states, n_state)
+                                    timestep += 1
+                                    continue
+
+                                if finish_leap:
+                                    if action == 0:
+                                        if abs(n_state) > 0.015:
+                                            reward = -1
+                                        elif abs(n_state) < 0.002:
+                                            reward = 1
+                                        else:
+                                            reward = 0
+                                    else:
+                                        if abs(n_state) > 0.0225:
+                                            reward = -1
+                                        elif abs(n_state - prev_states[0]) < 0.005:
+                                            reward = -1
+                                        else:
+                                            reward = 2
+
+                                    n_state = (n_state - (-0.010204584316159032)) / (0.05290357993014821)
+                                    prev_state = (prev_states[0] - (-0.010204584316159032)) / (0.05290357993014821)
+                                    # print(timestep, prev_states[0], n_state, action, reward, avg_pace, target_pace)
+                                    experiments_transition_buffer.add(self._wrap_transition(prev_state, action, reward, n_state, 0))
+                                    prev_states = []
+                                    t += 1
+                                    total_reward += reward
+
+                                    finish_leap = False
+
+                                if (not pd.isna(row[3])):  # Pacing activated
+                                    # action = np.random.randint(1, len(wrapper.times))
+                                    action = np.random.randint(1, len(wrapper.times))
+                                    skip_steps = wrapper.times[action] + 1
+                                else:  # Pacing not active
+                                    action = 0
+                                    skip_steps = 20 + 1
+
+                            timestep += 1
+                        # results[((participant-1)*4)+(i)][j] = total_reward
+                        if t >= max_steps:
+                            t = max_steps - 1
+                        experiments_transition_buffer['returns'][t] = experiments_transition_buffer['rewards'][t]
+                        for i2 in range(t - 1, episode_start - 1, -1):
+                            experiments_transition_buffer['returns'][i2] = experiments_transition_buffer['rewards'][i2] \
+                                                                  + self.gamma * experiments_transition_buffer['returns'][i2 + 1]
+                        episode_start = t + 1
+                        # print("Runner %s - %s R: %d" % (participant_number, test_name[exp][i], total_reward))
+
+                        episode_lengths.append(self.time + 1)
+                        episode_rewards.append(self.sum_rewards)
+                        time += 1
+        return_dict = {}
+        return_dict.update({'buffer': experiments_transition_buffer})
+        return return_dict
+
 class Experiments_runner(Runner):
     def __init__(self, controller, params={}, exploration_step=1):
         super().__init__(controller, params, exploration_step)
@@ -150,59 +255,63 @@ class Experiments_runner(Runner):
                     wrapper = EnvWrapper(target_pace, target_pace)
                     state_func = EwmaBiasState()
                     timestep = 0
-                    state = 0
+                    prev_states = []
                     action = 0
                     reward = 0
                     n_state = 0
                     finish_leap = False
                     skip_steps = 0
                     total_reward = 0
-                    # Add first value
-                    add_zero = 1
 
                     for row in calculated_values_norm.to_numpy():
-
+                        avg_pace = state_func.get_next_state(row[2])
+                        n_state = (avg_pace / target_pace) - 1
                         if skip_steps > 0:
+                            prev_states = np.append(prev_states, n_state)
                             if skip_steps == 1:
                                 finish_leap = True
                             skip_steps -= 1
                             timestep += 1
                             continue
                         else:
-                            avg_pace = state_func.get_next_state(row[2])
-                            n_state = (avg_pace / target_pace) - 1
-                            n_state = (n_state - (-0.010204584316159032)) / (0.05290357993014821)
 
                             if timestep == 0:
-                                state = n_state
+                                prev_states = np.append(prev_states, n_state)
                                 timestep += 1
                                 continue
 
                             if finish_leap:
-                                # print(timestep, state, n_state, action, reward, avg_pace, target_pace)
-                                self.experiments_transition_buffer.add(self._wrap_transition(state, action, reward, n_state, 0))
+                                if action == 0:
+                                    if abs(n_state) > 0.015:
+                                        reward = -1
+                                    elif abs(n_state) < 0.002:
+                                        reward = 1
+                                    else:
+                                        reward = 0
+                                else:
+                                    if abs(n_state) > 0.0225:
+                                        reward = -1
+                                    elif abs(n_state - prev_states[0]) < 0.005:
+                                        reward = -1
+                                    else:
+                                        reward = 2
+
+                                n_state = (n_state - (-0.010204584316159032)) / (0.05290357993014821)
+                                # print(timestep, prev_states[0], n_state, action, reward, avg_pace, target_pace)
+                                self.experiments_transition_buffer.add(self._wrap_transition(prev_states[0], action, reward, n_state, 0))
+                                prev_states = []
                                 t += 1
                                 total_reward += reward
-                                # Add random small 0's
-                                add_zero = np.random.randint(0,10)
 
                                 finish_leap = False
 
-                            if (not pd.isna(row[3]) and add_zero == 0):
+                            if (not pd.isna(row[3])):  # Pacing activated
                                 action = np.random.randint(1, len(wrapper.times))
-                                reward = - wrapper.times[action]
                                 skip_steps = wrapper.times[action] + 1
-                            else:
-                                if add_zero > 0:
-                                    add_zero -= 1
+                            else:  # Pacing not active
                                 action = 0
-                                reward = env.get_distance_reward(target_pace, avg_pace)
-                                # print(timestep, state, n_state, action, reward, avg_pace, target_pace)
-                                self.experiments_transition_buffer.add(self._wrap_transition(state, action, reward, n_state, 0))
-                                t += 1
-                                total_reward += reward
+                                skip_steps = 30 + 1
 
-                        state = n_state
                         timestep += 1
                     # results[((participant-1)*4)+(i)][j] = total_reward
                     if t >= max_steps:
