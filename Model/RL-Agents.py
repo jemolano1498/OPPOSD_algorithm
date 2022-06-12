@@ -16,7 +16,8 @@ import pickle
 #%%
 pref_pace = 181
 target_pace = pref_pace * 1.1
-batch_number = 300
+batch_number = 1000
+mini_batch_size = 1000
 #%%
 def default_params():
     """ These are the default parameters used int eh framework. """
@@ -123,25 +124,6 @@ def test_in_environment(experiment, env):
     plt.show()
 
     print(rewards)
-#%%
-def plot_experiments(experiments, names):
-    # sns.set()
-    colors = ['b', 'g', 'r']
-    plt.figure(figsize=(8, 6), dpi=80)
-    i = 0
-    for exp in experiments:
-        # Smooth curves
-        window = max(int(len(exp.episode_returns) / 50), 10)
-        print(window)
-        # if len(exp.episode_losses) < window + 2: return
-        returns = np.convolve(exp.episode_returns, np.ones(window) / window, 'valid')
-        # Determine x-axis based on samples or episodes
-        x_returns = [i + window for i in range(len(returns))]
-        plt.plot(x_returns, returns, colors[i], label=names[i])
-        plt.xlabel('environment steps' if exp.plot_train_samples else 'batch trainings')
-        plt.ylabel('episode return')
-        i+=1
-    plt.legend()
 
 batch_experiments = []
 
@@ -173,14 +155,14 @@ model = [model_actor, model_critic, model_w]
 
 experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
 
-try:
-    experiment.run(batch['buffer'])
-except KeyboardInterrupt:
-    experiment.close()
-return_dict = {}
-return_dict.update({'model' : 'Experimental Batch OPPOSD',
-                            'experiment': experiment})
-batch_experiments = np.append(batch_experiments, return_dict)
+# try:
+#     experiment.run(batch['buffer'])
+# except KeyboardInterrupt:
+#     experiment.close()
+# return_dict = {}
+# return_dict.update({'model' : 'Experimental-Batch-OPPOSD-10000',
+#                             'experiment': experiment})
+# batch_experiments = np.append(batch_experiments, return_dict)
 
 
 #%%
@@ -210,7 +192,7 @@ except KeyboardInterrupt:
     experiment.close()
 
 return_dict = {}
-return_dict.update({'model' : 'Experimental Batch OFFPAC',
+return_dict.update({'model' : 'Experimental-Batch-OFFPAC-10000',
                             'experiment': experiment})
 batch_experiments = np.append(batch_experiments, return_dict)
 
@@ -241,7 +223,8 @@ for exp in batch_experiments:
     # Smooth curves
     np.savetxt("%s_EXPERIMENT.csv"%(exp['model']), exp['experiment'].episode_returns, delimiter=",")
 
-dbfile = open('random_simulator_batch_steps_pickle_3e3', 'rb')
+dbfile = open('random_simulator_batch_steps_pickle_1e4', 'rb')
+# dbfile = open('random_simulator_batch_steps_pickle_5e3', 'rb')
 # dbfile = open('random_simulator_batch_steps_pickle_5e2', 'rb') # Do not work
 batch = pickle.load(dbfile)
 dbfile.close()
@@ -254,7 +237,7 @@ params['batch_size'] = int(3200)
 params['offpolicy_iterations'] = 10
 params['opposd'] = True
 params['max_batch_episodes'] = int(batch_number)
-params['mini_batch_size'] = int(500)
+params['mini_batch_size'] = int(mini_batch_size)
 
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
@@ -270,15 +253,20 @@ model = [model_actor, model_critic, model_w]
 
 experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
 
-try:
-    experiment.run(batch['buffer'])
-except KeyboardInterrupt:
-    experiment.close()
-return_dict = {}
-return_dict.update({'model' : 'Random Batch OPPOSD',
-                            'experiment': experiment})
-batch_experiments = np.append(batch_experiments, return_dict)
+# try:
+#     experiment.run(batch['buffer'])
+# except KeyboardInterrupt:
+#     experiment.close()
+# return_dict = {}
+# return_dict.update({'model' : 'Random-Batch-OPPOSD-10000',
+#                             'experiment': experiment})
+# batch_experiments = np.append(batch_experiments, return_dict)
 
+# dbfile = open('random_simulator_batch_steps_pickle_1e4', 'rb')
+dbfile = open('random_simulator_batch_steps_pickle_5e3', 'rb')
+# dbfile = open('random_simulator_batch_steps_pickle_5e2', 'rb') # Do not work
+batch = pickle.load(dbfile)
+dbfile.close()
 
 #%%
 params = default_params()
@@ -306,13 +294,13 @@ try:
 except KeyboardInterrupt:
     experiment.close()
 
-return_dict = {}
-return_dict.update({'model' : 'Random Batch OFFPAC',
-                            'experiment': experiment})
-batch_experiments = np.append(batch_experiments, return_dict)
-
-plot_experiments(batch_experiments, '2')
-
-for exp in batch_experiments:
-    # Smooth curves
-    np.savetxt("%s_EXPERIMENT.csv"%(exp['model']), exp['experiment'].episode_returns, delimiter=",")
+# return_dict = {}
+# return_dict.update({'model' : 'Random-Batch-OFFPAC-10000',
+#                             'experiment': experiment})
+# batch_experiments = np.append(batch_experiments, return_dict)
+#
+# plot_experiments(batch_experiments, '6')
+#
+# for exp in batch_experiments:
+#     # Smooth curves
+#     np.savetxt("%s_EXPERIMENT.csv"%(exp['model']), exp['experiment'].episode_returns, delimiter=",")
