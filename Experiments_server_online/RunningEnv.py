@@ -163,6 +163,7 @@ class EnvWrapper:
         self.tresshold = 0.0225
 
         self.max_steps = 500
+        self.max_transitions = 16
 
         self.state_traj = np.empty(0)
         self.pace = np.empty(0)
@@ -170,6 +171,7 @@ class EnvWrapper:
         self.env_pacing = np.empty(0)
 
         self.steps = 0
+        self.transitions = 0
 
     def step(self, action):
         reward = 1
@@ -193,7 +195,7 @@ class EnvWrapper:
                 self.pace = np.append(self.pace, current_pace)
                 self.env_pacing = np.append(self.env_pacing, real_pacing)
                 self.steps = self.steps + 1
-            if self.steps > self.max_steps:
+            if self.transitions >= self.max_transitions:
                 done = 1
 
             if abs(new_state[0]) > 0.015:
@@ -206,8 +208,9 @@ class EnvWrapper:
             self.rewards = np.append(self.rewards, reward)
             # Normalize output state values
             new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
+            self.transitions += 1
             return new_state, np.array([round(reward)], dtype=np.float), done
-        if self.steps > self.max_steps:
+        if self.transitions >= self.max_transitions:
             done = 1
         if abs(new_state[0]) > 0.0225:
             reward = -1
@@ -217,6 +220,7 @@ class EnvWrapper:
             reward = 2
         # Normalize output state values
         new_state = (new_state - (-0.010204584316159032)) / (0.05290357993014821)
+        self.transitions += 1
         return new_state, np.array([round(reward)], dtype=np.float), np.array([done])
 
     def reset(self):
@@ -226,6 +230,7 @@ class EnvWrapper:
         self.rewards = np.empty(0)
         self.env_pacing = np.empty(0)
         self.steps = 0
+        self.transitions = 0
         # return (self.running_env.step(0, self.target_pace)[1] - (-0.010204584316159032)) / (0.05290357993014821)
         return (self.step(0)[0])
 

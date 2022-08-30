@@ -1,4 +1,6 @@
 # Pytorch and tools
+import pickle
+
 import torch as th
 import numpy as np
 import sys
@@ -129,8 +131,9 @@ experiments_batch=False
 model=None
 train_batch=None
 mini_batch_size = 1000
-if len(sys.argv)>=6:
-    mini_batch_size = int(sys.argv[5])
+
+if (len(sys.argv)>=7):
+    mini_batch_size = int(sys.argv[6])
 
 
 if batch_size < 2000:
@@ -152,8 +155,14 @@ model = [model_actor, model_critic, model_w]
 if offpolicy_data=='experiment':
     experiments_batch = True
 
+if offpolicy_data=='random' and algorithm=='opposd':
+    dbfile = open('random_simulator_batch_steps_pickle', 'rb')
+    train_batch = pickle.load(dbfile)
+    dbfile.close()
+
 if algorithm=='opposd':
     opposd = True
+
 
 name = ('%s_%s_%d_%s')%(offpolicy_data, algorithm, batch_size, run_number)
 

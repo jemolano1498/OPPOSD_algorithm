@@ -10,6 +10,4 @@
 
 /usr/bin/scontrol show job -d "$SLURM_JOB_ID"
 
-# srun singularity exec first-try_latest.sif python3 OPPOSD.py
-# srun python dqn_solution.py
-srun python pace_experiments.py $1 $2 $3 $4 $5
+srun python pace_experiments.py $1 $2 $3
