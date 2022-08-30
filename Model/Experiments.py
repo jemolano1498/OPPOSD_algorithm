@@ -172,26 +172,28 @@ class ActorCriticExperiment(Experiment):
                 print('Steps limit reached')
                 break
 
-            interacted_episodes += batch_episodes
-            if interacted_episodes >= self.max_episodes:
-                print('Environment interaction limit reached')
-                break
+            # interacted_episodes += batch_episodes
+            # if interacted_episodes >= self.max_episodes:
+            #     print('Environment interaction limit reached')
+            #     break
 
             # Show intermediate results
-            # if self.print_dots:
-            #     print('.', end='')
-            # if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0 \
-            #         and len(self.episode_losses) > 2:
-            #     self.plot_training(update=True)
-            #     if self.print_when_plot:
-            #         print('Episode %u, 100-epi-return %.4g +- %.3g, length %u, loss %g' %
-            #               (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
-            #                np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
-            #                np.mean(self.episode_losses[-100:])))
+            if self.print_dots:
+                print('.', end='')
+            if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0 \
+                    and len(self.episode_losses) > 2:
+                self.plot_training(update=True)
+                if self.print_when_plot:
+                    print('Episode %u, 100-epi-return %.4g +- %.3g, length %u, loss %g, positives %d, 0-positives %d' %
+                          (len(self.episode_returns), np.mean(self.episode_returns[-100:]),
+                           np.std(self.episode_returns[-100:]), np.mean(self.episode_lengths[-100:]),
+                           np.mean(self.episode_losses[-100:]), (batch['buffer']['actions'][batch['buffer']['rewards']>0]).sum(),
+                           (batch['buffer']['actions'][batch['buffer']['rewards']>0]==0).sum()))
 
 class BatchActorCriticExperiment(Experiment):
     def __init__(self, params, model, learner=None, **kwargs):
         super().__init__(params, model, **kwargs)
+        self.models = model
         self.max_episodes = params.get('max_episodes', int(1E6))
         self.max_batch_episodes = params.get('max_batch_episodes', int(1E6))
         self.max_steps = params.get('max_steps', int(1E9))
@@ -199,16 +201,24 @@ class BatchActorCriticExperiment(Experiment):
         self.batch_size = params.get('batch_size', 1e5)
         self.mini_batch_size = params.get('mini_batch_size', 200)
         self.controller = ACController(model, num_actions=params.get('num_actions'), params=params)
-        self.controller = EpsilonGreedyController(controller=self.controller, params=params)
-        self.runner = Experiments_runner(self.controller, params=params)
+        # self.controller = EpsilonGreedyController(controller=self.controller, params=params)
+        # self.runner = Experiments_runner(self.controller, params=params)
+        self.runner = Runner(self.controller, params=params)
         self.learner = BatchReinforceLearner(model, params=params) if learner is None else learner
         self.learner.set_controller(self.controller)
         self.opposd = params.get('opposd', False)
         self.opposd_iterations = params.get('opposd_iterations', 50)
+        self.experiments_batch = params.get('experiments_batch', False)
+        self.data_folder_path = params.get('data_folder_path', "~/Documents/THESIS/Project_Juan/")
+        # self.data_folder_path = "/home/nfs/jmolano/THESIS/Project_Juan/"
 
     def get_transition_batch(self):
         transition_buffer = TransitionBatch(self.batch_size, self.runner.transition_format(), self.mini_batch_size)
-        batch = self.runner.experiments_transition_buffer
+        # batch = self.runner.experiments_transition_buffer
+        if self.experiments_batch:
+            batch = self.runner.fill_transition_buffer(transition_buffer, self.data_folder_path)
+        else:
+            batch = self.runner.run(self.batch_size, transition_buffer)
         return batch
 
     def close(self):
@@ -299,7 +309,7 @@ class BatchHeuristicActorCriticExperiment(Experiment):
                 self.episode_returns.append(partial_result)
 
             if self.plot_frequency is not None and (e + 1) % self.plot_frequency == 0:
-                self.plot_training(update=True)
+                # self.plot_training(update=True)
                 if self.print_when_plot:
                     print('Batch %u, epi-return %.4g +- %.3g' %
                           (len(self.episode_returns), np.mean(self.episode_returns[-10:]),

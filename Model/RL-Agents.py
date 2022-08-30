@@ -1,31 +1,24 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
+#%%
 # Pytorch and tools
 import torch as th
 import numpy as np
-import seaborn as sns
 import matplotlib.pyplot as plt
 from RunningEnv import EnvWrapper
 from Experiments import ActorCriticExperiment
+from Experiments import BatchActorCriticExperiment
 from Learners import ReinforceLearner
+from Learners import BatchReinforceLearner
+from Learners import ActorCriticLearner
 from Learners import OffpolicyActorCriticLearner
 from Learners import PPOLearner
-
-
-# In[2]:
-
-
+from Learners import BatchOffpolicyActorCriticLearner, BatchPPOLearner, OPPOSDLearner
+import pickle
+#%%
 pref_pace = 181
 target_pace = pref_pace * 1.1
-
-
-# In[3]:
-
-
+batch_number = 1000
+mini_batch_size = 1000
+#%%
 def default_params():
     """ These are the default parameters used int eh framework. """
     return {  # Debugging outputs and plotting during training
@@ -74,11 +67,7 @@ def default_params():
         'states_shape': (1,),  # Amount of states
         'num_actions': 5,  # Possible actions
     }
-
-
-# In[4]:
-
-
+#%%
 def test_in_environment(experiment, env):
     done = False
     env.reset()
@@ -92,7 +81,8 @@ def test_in_environment(experiment, env):
         score = 0
         time_step = 0
         while env.steps < 500:
-            action = experiment.controller.choose(np.array([2.5])).item()
+            pred = th.nn.functional.softmax(model_actor(th.tensor(state, dtype=th.float32).unsqueeze(dim=-1))[:, :n_actions], dim=-1)
+            action = th.distributions.Categorical(probs=pred).sample()
             new_state, reward, done = env.step(action)
             score += reward
             state = new_state
@@ -107,15 +97,13 @@ def test_in_environment(experiment, env):
 
     env.reset()
     state = env.step(0)[0]
+    rewards = 0
 
     while env.steps < 500:
-        action = experiment.controller.choose(np.array([2.5])).item()
+        pred = th.nn.functional.softmax(model_actor(th.tensor(state, dtype=th.float32).unsqueeze(dim=-1))[:, :n_actions], dim=-1)
+        action = th.distributions.Categorical(probs=pred).sample()
         new_state, reward, done = env.step(action)
-        # if reward < 0:
-        #     print(action, state, new_state, reward)
-        # if (action != 5):
-        # #     # print(action, (state+1)*pref_pace, (new_state+1)*pref_pace, reward)
-        #     print(action, state, new_state, reward)
+        rewards += reward
         state = new_state
 
     x = np.linspace(0, len(env.env_pacing), len(env.env_pacing))
@@ -135,133 +123,184 @@ def test_in_environment(experiment, env):
     plt.legend()
     plt.show()
 
-    print(np.sum(env.rewards))
+    print(rewards)
+
+batch_experiments = []
+
+dbfile = open('experiments_simulator_batch_steps_pickle_3e3', 'rb')
+batch = pickle.load(dbfile)
+dbfile.close()
+#%%
+
+params = default_params()
+params['plot_train_samples'] = False
+params['plot_frequency'] = 4
+params['batch_size'] = int(3200)
+params['offpolicy_iterations'] = 10
+params['opposd'] = True
+params['max_batch_episodes'] = int(batch_number)
+params['mini_batch_size'] = int(500)
+
+env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+
+# The model has n_action policy heads and one value head
+model_actor = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, n_actions))
+model_critic = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1))
+model_w = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1), th.nn.Softplus())
+model = [model_actor, model_critic, model_w]
+
+experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
+
+# try:
+#     experiment.run(batch['buffer'])
+# except KeyboardInterrupt:
+#     experiment.close()
+# return_dict = {}
+# return_dict.update({'model' : 'Experimental-Batch-OPPOSD-10000',
+#                             'experiment': experiment})
+# batch_experiments = np.append(batch_experiments, return_dict)
 
 
-# In[5]:
+#%%
+params = default_params()
+params['plot_train_samples'] = False
+params['plot_frequency'] = 4
+params['batch_size'] = int(1e5)
+params['offpolicy_iterations'] = 10
+params['max_batch_episodes'] = int(batch_number)
+params['mini_batch_size'] = int(500)
 
+env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
+n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+# The model has n_action policy heads and one value head
+model_actor = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, n_actions))
+model_critic = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1))
+model_w = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1), th.nn.Softplus())
+model = [model_actor, model_critic, model_w]
+experiment = BatchActorCriticExperiment(params, model, learner=BatchOffpolicyActorCriticLearner(model, params=params))
 
-def plot_experiments(experiments, names):
-    sns.set()
-    colors = ['b', 'g', 'r']
+try:
+    experiment.run(batch['buffer'])
+except KeyboardInterrupt:
+    experiment.close()
+
+return_dict = {}
+return_dict.update({'model' : 'Experimental-Batch-OFFPAC-10000',
+                            'experiment': experiment})
+batch_experiments = np.append(batch_experiments, return_dict)
+
+#%%
+def plot_experiments(experiments, name):
+    # sns.set()
+    colors = ['r', 'b', 'r:', 'b:', 'c', 'm']
     plt.figure(figsize=(8, 6), dpi=80)
     i = 0
     for exp in experiments:
         # Smooth curves
-        window = max(int(len(exp.episode_returns) / 50), 10)
-        if len(exp.episode_losses) < window + 2: return
-        returns = np.convolve(exp.episode_returns, np.ones(window) / window, 'valid')
+        window = max(int(len(exp['experiment'].episode_returns) / 5), 1)
+        # if len(exp.episode_losses) < window + 2: return
+        returns = np.convolve(exp['experiment'].episode_returns, np.ones(window) / window, 'valid')
         # Determine x-axis based on samples or episodes
         x_returns = [i + window for i in range(len(returns))]
-        plt.plot(x_returns, returns, colors[i], label=names[i])
-        plt.xlabel('environment steps' if exp.plot_train_samples else 'batch trainings')
-        plt.ylabel('episode return')
+        plt.plot(x_returns, returns, colors[i], label=exp['model'])
+        plt.xlabel('Policy gradient step')
+        plt.ylabel('Episode return')
         i+=1
     plt.legend()
+    plt.title('Running environment')
+    plt.savefig('running_comp_3000_exp_batch_%s.pdf'%(name))
+#%%
+plot_experiments(batch_experiments, '1')
 
+for exp in batch_experiments:
+    # Smooth curves
+    np.savetxt("%s_EXPERIMENT.csv"%(exp['model']), exp['experiment'].episode_returns, delimiter=",")
 
-# In[6]:
-
+dbfile = open('random_simulator_batch_steps_pickle_1e4', 'rb')
+# dbfile = open('random_simulator_batch_steps_pickle_5e3', 'rb')
+# dbfile = open('random_simulator_batch_steps_pickle_5e2', 'rb') # Do not work
+batch = pickle.load(dbfile)
+dbfile.close()
+#%%
 
 params = default_params()
 params['plot_train_samples'] = False
 params['plot_frequency'] = 4
-params['batch_size'] = 1000
-params['max_batch_episodes'] = int(500)
+params['batch_size'] = int(3200)
+params['offpolicy_iterations'] = 10
+params['opposd'] = True
+params['max_batch_episodes'] = int(batch_number)
+params['mini_batch_size'] = int(mini_batch_size)
+
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
+
 # The model has n_action policy heads and one value head
-model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, 512), th.nn.ReLU(),
-                         th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1))
-experiment = ActorCriticExperiment(params, model, learner=ReinforceLearner(model, params=params))
+model_actor = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, n_actions))
+model_critic = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1))
+model_w = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1), th.nn.Softplus())
+model = [model_actor, model_critic, model_w]
 
-# Re-executing this code-block picks up the experiment where you left off
-try:
-    experiment.run()
-except KeyboardInterrupt:
-    experiment.close()
-experiment.plot_training()
+experiment = BatchActorCriticExperiment(params, model, learner=OPPOSDLearner(model, params=params))
 
+# try:
+#     experiment.run(batch['buffer'])
+# except KeyboardInterrupt:
+#     experiment.close()
+# return_dict = {}
+# return_dict.update({'model' : 'Random-Batch-OPPOSD-10000',
+#                             'experiment': experiment})
+# batch_experiments = np.append(batch_experiments, return_dict)
 
-# In[7]:
+# dbfile = open('random_simulator_batch_steps_pickle_1e4', 'rb')
+dbfile = open('random_simulator_batch_steps_pickle_5e3', 'rb')
+# dbfile = open('random_simulator_batch_steps_pickle_5e2', 'rb') # Do not work
+batch = pickle.load(dbfile)
+dbfile.close()
 
-
-plot_experiments([experiment], ['Basic RL'])
-plt.savefig('RL')
-
-
-# In[15]:
-
-
-names = ['off-policy', 'off-policy PPO']
-experiments = []
-
-
-# In[16]:
-
-
+#%%
 params = default_params()
-params['offpolicy_iterations'] = 128
 params['plot_train_samples'] = False
 params['plot_frequency'] = 4
-params['max_episodes'] = int(600)
-params['batch_size'] = 1000
+params['batch_size'] = int(1e5)
+params['offpolicy_iterations'] = 10
+params['max_batch_episodes'] = int(batch_number)
+params['mini_batch_size'] = int(500)
 
 env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
 n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
 # The model has n_action policy heads and one value head
-model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, 512), th.nn.ReLU(),
-                         th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1))
-experiment = ActorCriticExperiment(params, model, learner=OffpolicyActorCriticLearner(model, params=params))
+model_actor = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, n_actions))
+model_critic = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1))
+model_w = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
+                         th.nn.Linear(128, 1), th.nn.Softplus())
+model = [model_actor, model_critic, model_w]
+experiment = BatchActorCriticExperiment(params, model, learner=BatchOffpolicyActorCriticLearner(model, params=params))
 
-# Re-executing this code-block picks up the experiment where you left off
 try:
-    experiment.run()
+    experiment.run(batch['buffer'])
 except KeyboardInterrupt:
     experiment.close()
 
-experiment.plot_training()
-test_in_environment(experiment, env)
-experiments = np.append(experiments, experiment)
-
-
-# In[17]:
-
-
-params = default_params()
-params['offpolicy_iterations'] = 128
-params['plot_train_samples'] = False
-params['plot_frequency'] = 4
-params['max_episodes'] = int(500)
-params['batch_size'] = 1000
-
-env = EnvWrapper(params.get('pref_pace'), params.get('target_pace'))
-n_actions, state_dim = params.get('num_actions'), params.get('states_shape')[0]
-# The model has n_action policy heads and one value head
-model = th.nn.Sequential(th.nn.Linear(state_dim, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, 512), th.nn.ReLU(),
-                         th.nn.Linear(512, 128), th.nn.ReLU(),
-                         th.nn.Linear(128, n_actions + 1))
-experiment = ActorCriticExperiment(params, model, learner=PPOLearner(model, params=params))
-
-# Re-executing this code-block picks up the experiment where you left off
-try:
-    experiment.run()
-except KeyboardInterrupt:
-    experiment.close()
-experiment.plot_training()
-
-test_in_environment(experiment, env)
-experiments = np.append(experiments, experiment)
-
-
-# In[18]:
-
-
-plot_experiments(experiments, names)
-plt.savefig('off policy')
-
+# return_dict = {}
+# return_dict.update({'model' : 'Random-Batch-OFFPAC-10000',
+#                             'experiment': experiment})
+# batch_experiments = np.append(batch_experiments, return_dict)
+#
+# plot_experiments(batch_experiments, '6')
+#
+# for exp in batch_experiments:
+#     # Smooth curves
+#     np.savetxt("%s_EXPERIMENT.csv"%(exp['model']), exp['experiment'].episode_returns, delimiter=",")

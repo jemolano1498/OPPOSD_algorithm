@@ -10,7 +10,7 @@ class TransitionBatch:
         over the same TransitionBatch in two threads at the same time). """
 
     def __init__(self, max_size, transition_format, batch_size=32):
-        self.lock = threading.Lock()
+        # self.lock = threading.Lock()
         self.indices = []
         self.size = 0
         self.first = 0
@@ -38,18 +38,19 @@ class TransitionBatch:
         if isinstance(key, slice):
             key = slice(0 if key.start is None else key.start, self.size if key.stop is None else key.stop,
                         1 if key.step is None else key.step)
-            self.lock.acquire()
+            # self.lock.acquire()
             try:
                 batch = self._clone_empty_batch()
                 batch.size = (key.stop - key.start) // key.step
                 for k, v in self.dict.items():
                     batch.dict[k] = v[key]
             finally:
-                self.lock.release()
+                pass
+            #     self.lock.release()
             return batch
         # Collect and return a set of transitions specified by the LongTensor "key"
         if isinstance(key, th.Tensor):
-            self.lock.acquire()
+            # self.lock.acquire()
             try:
                 batch = self._clone_empty_batch(max_size=key.shape[0])
                 batch.size = key.shape[0]
@@ -57,32 +58,35 @@ class TransitionBatch:
                     key = key.view(batch.size, *[1 for _ in range(len(v.shape[1:]))])
                     batch.dict[k] = v.gather(dim=0, index=key.expand(batch.size, *v.shape[1:]))
             finally:
-                self.lock.release()
+                pass
+            #     self.lock.release()
             return batch
         return None
 
     def get_first(self):
         """ Returns a batch of the oldest entries of all variables. """
         batch = self._clone_empty_batch(max_size=1)
-        self.lock.acquire()
+        # self.lock.acquire()
         try:
             batch.size = 1
             for k, v in self.dict.items():
                 batch.dict[k] = v[self.first].unsqueeze(dim=0)
         finally:
-            self.lock.release()
+            pass
+        #     self.lock.release()
         return batch
 
     def get_last(self):
         """ Returns a batch of the newest entries of all variables. """
         batch = self._clone_empty_batch(max_size=1)
-        self.lock.acquire()
+        # self.lock.acquire()
         try:
             batch.size = 1
             for k, v in self.dict.items():
                 batch.dict[k] = v[(self.first + self.size - 1) % self.size].unsqueeze(dim=0)
         finally:
-            self.lock.release()
+            pass
+        #     self.lock.release()
         return batch
 
     def add(self, trans: dict):
@@ -90,7 +94,7 @@ class TransitionBatch:
         if isinstance(trans, TransitionBatch):
             trans = trans.dict
         # Add all data in the dict
-        self.lock.acquire()
+        # self.lock.acquire()
         try:
             n = 0
             idx = None
@@ -108,23 +112,25 @@ class TransitionBatch:
                 self.first = (self.first + n) % self.max_size
                 self.size = self.max_size
         finally:
-            self.lock.release()
+            pass
+        #     self.lock.release()
         return self
 
     def trim(self):
         """ Reduces the length of the max_size to its actual size (in-place). Returns self. """
-        self.lock.acquire()
+        # self.lock.acquire()
         try:
             for k, v in self.dict.items():
                 self.dict[k] = v[:self.size]
             self.max_size = self.size
         finally:
-            self.lock.release()
+            pass
+        #     self.lock.release()
         return self
 
     def replace(self, batch, index=0):
         """ Replaces parts of this batch with another batch (which must be smaller). """
-        self.lock.acquire()
+        # self.lock.acquire()
         try:
             # assert batch.max_size <= self.max_size - index, "Replacement is larger then target area in batch."
             assert batch.size <= self.max_size - index, "Replacement is larger then target area in batch."
@@ -133,7 +139,8 @@ class TransitionBatch:
                     v = v[:batch.size]
                 self.dict[k][index:(index + batch.max_size)] = v
         finally:
-            self.lock.release()
+            pass
+        #     self.lock.release()
 
 
     def sample(self, batch_size=0):
